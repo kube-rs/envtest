@@ -52,10 +52,10 @@ pub enum EnvironmentError {
 #[derive(rust2go::R2G, Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Environment {
     /// crd_install_options are the options for installing CRDs.
-    crd_install_options: CRDInstallOptions,
+    pub crd_install_options: CRDInstallOptions,
 
     /// binary_assets_settings are the settings for downloading and using binary assets.
-    binary_assets_settings: BinaryAssetsSettings,
+    pub binary_assets_settings: BinaryAssetsSettings,
 }
 
 #[derive(rust2go::R2G, Debug, Clone, PartialEq, Eq, Hash)]
@@ -63,19 +63,19 @@ pub struct BinaryAssetsSettings {
     /// download_binary_assets indicates that the envtest binaries should be downloaded.
     /// If BinaryAssetsDirectory is also set, it is used to store the downloaded binaries,
     /// otherwise a tmp directory is created.
-    download_binary_assets: bool,
+    pub download_binary_assets: bool,
 
     /// download_binary_assets_version is the version of envtest binaries to download.
     /// Defaults to the latest stable version (i.e. excluding alpha / beta / RC versions).
-    download_binary_assets_version: String,
+    pub download_binary_assets_version: String,
 
     /// download_binary_assets_index_url is the index used to discover envtest binaries to download.
     /// Defaults to https://raw.githubusercontent.com/kubernetes-sigs/controller-tools/HEAD/envtest-releases.yaml.
-    download_binary_assets_index_url: String,
+    pub download_binary_assets_index_url: String,
 
     /// binary_assets_directory is the path where the binaries required for the envtest are
     /// located in the local environment. This field can be overridden by setting KUBEBUILDER_ASSETS.
-    binary_assets_directory: String,
+    pub binary_assets_directory: String,
 }
 
 impl Default for BinaryAssetsSettings {
