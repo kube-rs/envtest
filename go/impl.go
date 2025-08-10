@@ -109,8 +109,6 @@ func (e Envtest) create(req *Environment) (resp CreateResponse) {
 
 	config, err := env.Start()
 	if err != nil {
-		defer destroy(env)
-
 		return storeErr(err)
 	}
 
