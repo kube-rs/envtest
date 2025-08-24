@@ -1,90 +1,128 @@
 # envtest
 
-This crate provides a convenient Rust wrapper around the Go `envtest` package via the `rust2go` binding generator.  
-It allows you to spin up a temporary Kubernetes control plane for integration testing and then clean it up cleanly.
+> A lightweight, type‑safe wrapper around the Kubernetes `envtest` Go package that lets you spin up a temporary control plane from Rust.
+
+`envtest` aims to make integration testing with real Kubernetes components straightforward. This project is based on the `envtest` Go package, but provides a Rust interface for the library usage.
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Getting Started](#getting-started)
+  - [Installation](#installation)
+  - [Basic Usage](#basic-usage)
+  - [Customizing the Environment](#customizing-the-environment)
+  - [Explicit Cleanup](#explicit-cleanup)
+- [Building the Bindings](#building-the-bindings)
+- [License](#license)
+
+---
 
 ## Features
 
-- **Create** an isolated test environment.
+- **Create** an isolated test environment with a fully‑working control plane.
 - **Destroy** the environment automatically when the `Server` instance is dropped.
-- **Retrieve** the kubeconfig as a strongly‑typed Rust structure.
+- **Retrieve** the kubeconfig as a strongly‑typed `kube::config::Kubeconfig`.
+- **Pre‑install** provide user CRDs, either from files or in‑memory definitions.
 
-## Usage
+---
+
+## Getting Started
+
+### Installation
+
+Add `envtest` to your Cargo.toml:
+
+```toml
+[dependencies]
+envtest = "0.1"
+kube = { version = "1" }
+```
+
+> **Note**: `rust2go` requires a working Go toolchain and `clang` for the bindgen step.  
+> Make sure that Go (`GO111MODULE=on`) is available on your PATH.
+
+### Basic Usage
 
 ```rust
 use envtest::Environment;
-use kube::config::Kubeconfig;
+use kube::{Client, config::Kubeconfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Build the default environment (uses latest envtest binaries)
+    // 1. Build the default environment (latest envtest binaries)
     let env = Environment::default();
 
-    // 2. Create the environment – this starts a temporary control plane
+    // 2. Spin up a temporary control plane
     let server = env.create()?;
 
-    // 3. Consume the kubeconfig.
+    // 3. Retrieve a strongly‑typed kubeconfig
     let kubeconfig: Kubeconfig = server.kubeconfig()?;
 
-    // 4. Use the kubeconfig to interact with Kubernetes
+    // 4. Create a `kube` client
     let client = Client::try_from(kubeconfig)?;
 
-    // 5. When `server` goes out of scope, the environment will be automatically destroyed.
+    // 5. `server` is dropped at the end of scope, cleaning up the control plane
     Ok(())
 }
 ```
 
 ### Customizing the Environment
 
-You can tweak the `Environment` configuration before calling `create`.  
-`Environment` contains two nested structs – `CRDInstallOptions` and
-`BinaryAssetsSettings` – that let you control which CRDs are installed
-and how the envtest binaries are obtained.
+`Environment` exposes two nested structs:
 
-* `crd_install_options.paths` – paths to directories or files containing CRDs. 
-* `crd_install_options.crds` – list of CRD strings to install. 
-* `crd_install_options.error_if_path_missing` – whether to fail if a path is not found.  
-* `binary_assets_settings.download_binary_assets` – set to `false` to use binaries already available on the system (e.g., via `KUBEBUILDER_ASSETS`).  
-* `binary_assets_settings.binary_assets_directory` – directory where the binaries will be stored or looked up.  
-* `binary_assets_settings.download_binary_assets_version` – specific version to download.  
-* `binary_assets_settings.download_binary_assets_index_url` – URL pointing to the envtest releases YAML.
+| Field | Purpose |
+|-------|---------|
+| `crd_install_options.paths` | Paths to directories or files with CRDs. |
+| `crd_install_options.crds` | In‑memory CRDs to install. |
+| `crd_install_options.error_if_path_missing` | Fail if a a CRD path is missing. |
+| `binary_assets_settings.download_binary_assets` | `false` → use binaries from `$KUBEBUILDER_ASSETS`. |
+| `binary_assets_settings.binary_assets_directory` | Cache directory for downloaded binaries. |
+| `binary_assets_settings.download_binary_assets_version` | Specific `envtest` version to download. |
+| `binary_assets_settings.download_binary_assets_index_url` | URL pointing to the envtest release index. |
 
 #### Using `with_crds`
-
-The `Environment::with_crds` method accepts a list of `CustomResourceDefinition`s to pre-install it with the environment. This works well with `kube` CRD generation trait and can be used to add custom CRDs without the need to store them in a separate file.
 
 ```rust
 use envtest::{Environment, BinaryAssetsSettings};
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Build the environment
-    let env = Environment::default().with_crds(vec![CustomResourceDefinition::default()])?;
+    let env = Environment::default()
+        .with_crds(vec![CustomResourceDefinition::default()])?;
 
-    // Create the test server with pre-defined CRDs
     let server = env.create()?;
-
     Ok(())
 }
 ```
 
-### Cleaning Up
+### Explicit Cleanup
 
-The `Server` struct implements `Drop`, so the test environment is cleaned automatically when it is dropped.  
-If you need explicit control:
+The `Server` implements `Drop`, but you can destroy it manually:
 
 ```rust
 let server = env.create()?;
 server.destroy()?;
 ```
 
+---
+
 ## Building the Bindings
 
-The crate uses [`rust2go`][] to generate the Go bindings at build time. This crate relies on `bindgen` crate to generate the bindings from C headers, requiring `clang` dependencys to be installed. Refer to bindgen [requirements][] for more details.  
-Make sure `GO111MODULE=on` and that Go is available on your PATH.  
+`envtest` generates Go bindings at compile time via `rust2go`. The build process relies on:
 
-[requirements]: https://rust-lang.github.io/rust-bindgen/requirements.html#requirements
+- [`rust2go`][] (which uses `bindgen` under the hood)
+- A working Go toolchain (`GO111MODULE=on`)
+- `clang` (for bindgen)
+
+Refer to the [bindgen requirements](https://rust-lang.github.io/rust-bindgen/requirements.html#requirements) for more details.
+
 [`rust2go`]: https://github.com/ihciah/rust2go
+
+---
 
 ## License
 
-MIT
+MIT license – see the [LICENSE](LICENSE) file for details.
+
+---
