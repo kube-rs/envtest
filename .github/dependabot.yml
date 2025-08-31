@@ -29,7 +29,7 @@ updates:
           - "flate2"
           - "zip"
           - "tar"
-  - package-ecosystem: "go"
+  - package-ecosystem: "gomod"
     directory: "/go"
     schedule:
       interval: "daily"
