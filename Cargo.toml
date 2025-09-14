@@ -6,7 +6,7 @@ description = "A lightweight, type‑safe wrapper around the Kubernetes `envtest
 version = "0.1.0"
 edition = "2024"
 license = "MIT/Apache-2.0"
-include = ["/src", "/go"]
+include = ["/src", "/go", "/build.rs"]
 
 [dependencies]
 rust2go = { version = "0.4.1" }
