@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags: ["*"]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  crates_io_publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Set version in Cargo.toml from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG_NAME#v}"
+          echo "Setting version to ${VERSION} from tag ${TAG_NAME}"
+          sed -i -E 's/^version = ".*"/version = "'"${VERSION}"'"/' Cargo.toml
+          echo "Updated Cargo.toml version line:"
+          grep '^version = ' Cargo.toml || true
+
+      - name: cargo login
+        run: cargo login ${{ secrets.CRATES_IO_API_TOKEN }}
+
+      - name: cargo publish
+        run: cargo publish --all-features --allow-dirty
