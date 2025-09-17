@@ -15,6 +15,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache: true
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Set version in Cargo.toml from tag
