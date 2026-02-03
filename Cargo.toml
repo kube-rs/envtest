@@ -9,10 +9,10 @@ license = "MIT/Apache-2.0"
 include = ["/src", "/go", "/build.rs"]
 
 [dependencies]
-rust2go = { version = "0.4.1" }
+rust2go = { version = "0.4.3" }
 serde = "1"
 serde_json = "1"
 thiserror = "2"
 
 [build-dependencies]
-rust2go = { version = "0.4.1", features = ["build"] }
+rust2go = { version = "0.4.3", features = ["build"] }
