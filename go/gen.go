@@ -8,28 +8,28 @@ package main
 #include <stdint.h>
 #include <stdlib.h>
 
-typedef struct StringRef {
-  const uint8_t *ptr;
-  uintptr_t len;
-} StringRef;
-
-typedef struct BinaryAssetsSettingsRef {
-  bool download_binary_assets;
-  struct StringRef download_binary_assets_version;
-  struct StringRef download_binary_assets_index_url;
-  struct StringRef binary_assets_directory;
-} BinaryAssetsSettingsRef;
-
 typedef struct ListRef {
   const void *ptr;
   uintptr_t len;
 } ListRef;
+
+typedef struct BinaryAssetsSettingsRef {
+  bool download_binary_assets;
+  struct ListRef download_binary_assets_version;
+  struct ListRef download_binary_assets_index_url;
+  struct ListRef binary_assets_directory;
+} BinaryAssetsSettingsRef;
 
 typedef struct CRDInstallOptionsRef {
   struct ListRef paths;
   struct ListRef crds;
   bool error_if_path_missing;
 } CRDInstallOptionsRef;
+
+typedef struct StringRef {
+  const uint8_t *ptr;
+  uintptr_t len;
+} StringRef;
 
 typedef struct ServerRef {
   struct StringRef kubeconfig;
@@ -307,6 +307,7 @@ func ownEnvironment(p C.EnvironmentRef) Environment {
 }
 func cntEnvironment(s *Environment, cnt *uint) [0]C.EnvironmentRef {
 	cntCRDInstallOptions(&s.crd_install_options, cnt)
+	cntBinaryAssetsSettings(&s.binary_assets_settings, cnt)
 	return [0]C.EnvironmentRef{}
 }
 func refEnvironment(p *Environment, buffer *[]byte) C.EnvironmentRef {
@@ -318,38 +319,39 @@ func refEnvironment(p *Environment, buffer *[]byte) C.EnvironmentRef {
 
 type BinaryAssetsSettings struct {
 	download_binary_assets           bool
-	download_binary_assets_version   string
-	download_binary_assets_index_url string
-	binary_assets_directory          string
+	download_binary_assets_version   []string
+	download_binary_assets_index_url []string
+	binary_assets_directory          []string
 }
 
 func newBinaryAssetsSettings(p C.BinaryAssetsSettingsRef) BinaryAssetsSettings {
 	return BinaryAssetsSettings{
 		download_binary_assets:           newC_bool(p.download_binary_assets),
-		download_binary_assets_version:   newString(p.download_binary_assets_version),
-		download_binary_assets_index_url: newString(p.download_binary_assets_index_url),
-		binary_assets_directory:          newString(p.binary_assets_directory),
+		download_binary_assets_version:   new_list_mapper(newString)(p.download_binary_assets_version),
+		download_binary_assets_index_url: new_list_mapper(newString)(p.download_binary_assets_index_url),
+		binary_assets_directory:          new_list_mapper(newString)(p.binary_assets_directory),
 	}
 }
 func ownBinaryAssetsSettings(p C.BinaryAssetsSettingsRef) BinaryAssetsSettings {
 	return BinaryAssetsSettings{
 		download_binary_assets:           newC_bool(p.download_binary_assets),
-		download_binary_assets_version:   ownString(p.download_binary_assets_version),
-		download_binary_assets_index_url: ownString(p.download_binary_assets_index_url),
-		binary_assets_directory:          ownString(p.binary_assets_directory),
+		download_binary_assets_version:   new_list_mapper(ownString)(p.download_binary_assets_version),
+		download_binary_assets_index_url: new_list_mapper(ownString)(p.download_binary_assets_index_url),
+		binary_assets_directory:          new_list_mapper(ownString)(p.binary_assets_directory),
 	}
 }
 func cntBinaryAssetsSettings(s *BinaryAssetsSettings, cnt *uint) [0]C.BinaryAssetsSettingsRef {
-	_ = s
-	_ = cnt
+	cnt_list_mapper(cntString)(&s.download_binary_assets_version, cnt)
+	cnt_list_mapper(cntString)(&s.download_binary_assets_index_url, cnt)
+	cnt_list_mapper(cntString)(&s.binary_assets_directory, cnt)
 	return [0]C.BinaryAssetsSettingsRef{}
 }
 func refBinaryAssetsSettings(p *BinaryAssetsSettings, buffer *[]byte) C.BinaryAssetsSettingsRef {
 	return C.BinaryAssetsSettingsRef{
 		download_binary_assets:           refC_bool(&p.download_binary_assets, buffer),
-		download_binary_assets_version:   refString(&p.download_binary_assets_version, buffer),
-		download_binary_assets_index_url: refString(&p.download_binary_assets_index_url, buffer),
-		binary_assets_directory:          refString(&p.binary_assets_directory, buffer),
+		download_binary_assets_version:   ref_list_mapper(refString)(&p.download_binary_assets_version, buffer),
+		download_binary_assets_index_url: ref_list_mapper(refString)(&p.download_binary_assets_index_url, buffer),
+		binary_assets_directory:          ref_list_mapper(refString)(&p.binary_assets_directory, buffer),
 	}
 }
 

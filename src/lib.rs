@@ -18,21 +18,21 @@ trait EnvTest {
 /// Response returned from [`EnvTest::create`].
 #[derive(rust2go::R2G)]
 struct CreateResponse {
-    err: Vec<String>,
+    err: Option<String>,
     server: Server,
 }
 
 /// Response returned from [`EnvTest::destroy`].
 #[derive(rust2go::R2G)]
 struct DestroyResponse {
-    err: Vec<String>,
+    err: Option<String>,
 }
 
 /// Errors that can occur while creating an environment.
 #[derive(thiserror::Error, Debug)]
 pub enum EnvironmentError {
     #[error("Environment create error: {0}")]
-    CreateError(String),
+    Create(String),
 }
 
 /// Represents a request to create a test environment.
@@ -67,15 +67,15 @@ pub struct BinaryAssetsSettings {
 
     /// download_binary_assets_version is the version of envtest binaries to download.
     /// Defaults to the latest stable version (i.e. excluding alpha / beta / RC versions).
-    pub download_binary_assets_version: String,
+    pub download_binary_assets_version: Option<String>,
 
     /// download_binary_assets_index_url is the index used to discover envtest binaries to download.
     /// Defaults to https://raw.githubusercontent.com/kubernetes-sigs/controller-tools/HEAD/envtest-releases.yaml.
-    pub download_binary_assets_index_url: String,
+    pub download_binary_assets_index_url: Option<String>,
 
     /// binary_assets_directory is the path where the binaries required for the envtest are
     /// located in the local environment. This field can be overridden by setting KUBEBUILDER_ASSETS.
-    pub binary_assets_directory: String,
+    pub binary_assets_directory: Option<String>,
 }
 
 impl Default for BinaryAssetsSettings {
@@ -106,25 +106,30 @@ impl Environment {
     /// Create a new [`Server`] based on the current configuration.
     ///
     /// Returns an [`EnvironmentError`] if the Go side reports any errors.
-    #[must_use]
     pub fn create(&self) -> Result<Server, EnvironmentError> {
         let res = EnvTestImpl::create(self.clone());
-        if let Some(error) = res.err.first().cloned() {
-            return Err(EnvironmentError::CreateError(error));
-        }
-
+        res.err.map(EnvironmentError::Create).map_or(Ok(()), Err)?;
         Ok(res.server)
     }
 
-    /// Add CRDs to the environment.
+    /// Add one or many CRDs to the environment.
     ///
     /// # Errors
     ///
     /// Returns an [`serde_json::Error`] if any CRDs cannot be serialized to JSON.
-    pub fn with_crds(&mut self, crds: Vec<impl serde::Serialize>) -> Result<&mut Self, serde_json::Error> {
-        for crd in crds {
-            let crd = serde_json::to_string(&crd)?;
-            self.crd_install_options.crds.push(crd);
+    pub fn with_crds(&mut self, crds: impl serde::Serialize) -> Result<&mut Self, serde_json::Error> {
+        let crds = serde_json::to_value(crds)?;
+
+        if let serde_json::Value::Array(crds) = crds {
+            for crd in crds {
+                self.crd_install_options
+                    .crds
+                    .push(serde_json::to_string(&crd)?);
+            }
+        } else {
+            self.crd_install_options
+                .crds
+                .push(serde_json::to_string(&crds)?);
         }
 
         Ok(self)
@@ -135,7 +140,7 @@ impl Environment {
 #[derive(thiserror::Error, Debug)]
 pub enum DestroyError {
     #[error("Environment destroy error: {0}")]
-    DestroyError(String),
+    Destroy(String),
 }
 
 /// Represents a running test server.
@@ -163,10 +168,7 @@ impl Server {
     /// Errors returned by the Go side are converted into `DestroyError`.
     pub fn destroy(&self) -> Result<(), DestroyError> {
         let res = EnvTestImpl::destroy(self.kubeconfig.clone());
-        if let Some(error) = res.err.first().cloned() {
-            return Err(DestroyError::DestroyError(error));
-        }
-        Ok(())
+        res.err.map(DestroyError::Destroy).map_or(Ok(()), Err)
     }
 }
 
@@ -174,5 +176,47 @@ impl Drop for Server {
     /// Automatically destroy the server when it goes out of scope.
     fn drop(&mut self) {
         let _ = self.destroy();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Environment;
+
+    #[test]
+    fn with_crds_accepts_option() {
+        let mut env = Environment::default();
+
+        env.with_crds(Some("42")).unwrap();
+
+        assert_eq!(env.crd_install_options.crds, vec!["42"]);
+    }
+
+    #[test]
+    fn with_crds_accepts_vec() {
+        let mut env = Environment::default();
+
+        env.with_crds(vec!["a", "b"]).unwrap();
+
+        assert_eq!(env.crd_install_options.crds, vec!["\"a\"", "\"b\""]);
+    }
+
+    #[test]
+    fn with_crds_accepts_slice() {
+        let mut env = Environment::default();
+        let crds = ["1", "2", "3"];
+
+        env.with_crds(&crds).unwrap();
+
+        assert_eq!(env.crd_install_options.crds, vec!["1", "2", "3"]);
+    }
+
+    #[test]
+    fn with_crds_accepts_single_crd() {
+        let mut env = Environment::default();
+
+        env.with_crds("42").unwrap();
+
+        assert_eq!(env.crd_install_options.crds, vec!["42"]);
     }
 }
