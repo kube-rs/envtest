@@ -20,7 +20,10 @@ fn main() {
     // Ensure build script reruns when Rust API definitions change.
     watch_files!("src", "go/go.sum", "go/go.mod", "go/impl.go",);
 
-    let mut builder = rust2go::Builder::new().with_go_src("go");
+    let mut builder = rust2go::Builder::new()
+        .with_go_src("go")
+        // Use dynamic linking, as we don't expect to run envtest outside of local tests use case
+        .with_link(rust2go::LinkType::Dynamic);
 
     let src = Path::new("./src/lib.rs");
     let dst = Path::new("./go/gen.go");

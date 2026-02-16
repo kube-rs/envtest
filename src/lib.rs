@@ -33,6 +33,10 @@ struct DestroyResponse {
 pub enum EnvironmentError {
     #[error("Environment create error: {0}")]
     Create(String),
+    #[error("CRD serialization error: {0}")]
+    CrdSerialize(#[from] serde_json::Error),
+    #[error("Unsupported CRD type. Expected string, object, or array of those.")]
+    UnsupportedCrdType,
 }
 
 /// Represents a request to create a test environment.
@@ -40,13 +44,12 @@ pub enum EnvironmentError {
 /// # Examples
 ///
 /// ```rust
-/// use envtest::Environment;
-///
 /// async fn test() -> Result<(), Box<dyn std::error::Error>> {
-///     # let env = Environment::default();
-///     # let server = env.create()?;
-///     # let kubeconfig: serde_json::Value = server.kubeconfig()?;
-///     # Ok(())
+///     let env = envtest::Environment::default();
+///     let server = env.create()?;
+///     let kubeconfig = server.kubeconfig()?;
+///     panic!("environment created");
+///     Ok(())
 /// }
 /// ```
 #[derive(rust2go::R2G, Default, Debug, Clone, PartialEq, Eq, Hash)]
@@ -116,20 +119,29 @@ impl Environment {
     ///
     /// # Errors
     ///
-    /// Returns an [`serde_json::Error`] if any CRDs cannot be serialized to JSON.
-    pub fn with_crds(&mut self, crds: impl serde::Serialize) -> Result<&mut Self, serde_json::Error> {
-        let crds = serde_json::to_value(crds)?;
-
-        if let serde_json::Value::Array(crds) = crds {
-            for crd in crds {
+    /// Returns an [`EnvironmentError`] when serialization fails or an unsupported
+    /// CRD value is provided.
+    pub fn with_crds(mut self, crds: impl serde::Serialize) -> Result<Self, EnvironmentError> {
+        match serde_json::to_value(crds)? {
+            serde_json::Value::Array(crds) => {
+                self.crd_install_options.crds.reserve(crds.len());
+                for crd in crds {
+                    self.crd_install_options
+                        .crds
+                        .push(serde_json::to_string(&crd)?);
+                }
+            }
+            serde_json::Value::Object(crd) => {
                 self.crd_install_options
                     .crds
                     .push(serde_json::to_string(&crd)?);
             }
-        } else {
-            self.crd_install_options
-                .crds
-                .push(serde_json::to_string(&crds)?);
+            serde_json::Value::String(crd) => {
+                self.crd_install_options
+                    .crds
+                    .push(serde_json::Value::String(crd).to_string());
+            }
+            _ => return Err(EnvironmentError::UnsupportedCrdType),
         }
 
         Ok(self)
@@ -138,9 +150,19 @@ impl Environment {
 
 /// Errors that can occur while destroying an environment.
 #[derive(thiserror::Error, Debug)]
-pub enum DestroyError {
+pub enum ServerError {
     #[error("Environment destroy error: {0}")]
     Destroy(String),
+}
+
+#[cfg(feature = "kube")]
+#[derive(thiserror::Error, Debug)]
+pub enum ClientError {
+    #[error("Deserialize kubeconfig error: {0}")]
+    Kubeconfig(#[from] serde_json::Error),
+
+    #[error("Creating client error: {0}")]
+    Client(#[from] kube::Error),
 }
 
 /// Represents a running test server.
@@ -150,25 +172,64 @@ pub struct Server {
 }
 
 impl Server {
+    /// Destroy the server and clean up resources.
+    ///
+    /// Errors returned by the Go side are converted into [`ServerError`].
+    pub fn destroy(&self) -> Result<(), ServerError> {
+        let res = EnvTestImpl::destroy(self.kubeconfig.clone());
+        res.err.map(ServerError::Destroy).map_or(Ok(()), Err)
+    }
+
+    /// Build a typed client from the stored kubeconfig.
+    ///
+    /// This first deserializes the kubeconfig using [`Self::kubeconfig`] and
+    /// then converts it into `C` via `TryFrom`.
+    ///
+    /// ```rust
+    /// # tokio_test::block_on(async {
+    /// async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let server = envtest::Environment::default().create()?;
+    ///     let client = server.client()?;
+    ///     server.destroy()?;
+    ///     Ok(())
+    /// }
+    /// run().await.unwrap()
+    /// # })
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::Kubeconfig`] if [`kube::config::Kubeconfig`] deserialization fails,
+    /// or [`ClientError::Client`] if conversion into [`kube::Client`] fails.
+    #[cfg(feature = "kube")]
+    #[inline]
+    pub fn client(&self) -> Result<kube::Client, ClientError> {
+        Ok(self.kubeconfig()?.try_into()?)
+    }
+
     /// Deserialize the stored kubeconfig into the given type.
     ///
-    /// The kubeconfig is stored as a JSON string; this helper converts it
-    /// into a strongly typed value.
+    /// ```rust
+    /// let server = envtest::Environment::default().create()?;
+    /// let cfg = server.kubeconfig()?;
+    /// server.destroy()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     ///
     /// # Errors
     ///
     /// If the kubeconfig cannot be deserialized into the given type, a
     /// [`serde_json::Error`] is returned.
-    pub fn kubeconfig<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
-        serde_json::from_str(&self.kubeconfig)
+    #[cfg(feature = "kube")]
+    #[inline]
+    pub fn kubeconfig(&self) -> Result<kube::config::Kubeconfig, serde_json::Error> {
+        serde_json::from_str(self.as_ref())
     }
+}
 
-    /// Destroy the server and clean up resources.
-    ///
-    /// Errors returned by the Go side are converted into `DestroyError`.
-    pub fn destroy(&self) -> Result<(), DestroyError> {
-        let res = EnvTestImpl::destroy(self.kubeconfig.clone());
-        res.err.map(DestroyError::Destroy).map_or(Ok(()), Err)
+impl AsRef<str> for Server {
+    fn as_ref(&self) -> &str {
+        &self.kubeconfig
     }
 }
 
@@ -181,24 +242,75 @@ impl Drop for Server {
 
 #[cfg(test)]
 mod tests {
-    use super::Environment;
+    use super::{Environment, EnvironmentError};
+
+    #[tokio::test]
+    async fn e2e() {
+        let env = Environment::default();
+        let server = env.create().unwrap();
+        server.destroy().unwrap()
+    }
 
     #[test]
     fn with_crds_accepts_option() {
-        let mut env = Environment::default();
+        let env = Environment::default().with_crds(Some("42")).unwrap();
 
-        env.with_crds(Some("42")).unwrap();
+        assert_eq!(env.crd_install_options.crds, vec!["\"42\""]);
+        let err = env.create().unwrap_err();
+        assert!(matches!(err, EnvironmentError::Create(_)));
+        assert!(
+            err.to_string()
+                .contains("json: cannot unmarshal string into Go value")
+        );
+    }
 
-        assert_eq!(env.crd_install_options.crds, vec!["42"]);
+    #[cfg(feature = "kube")]
+    #[tokio::test]
+    async fn with_crds_accepts_simple_real_crd() {
+        let crd = serde_json::json!({
+            "apiVersion": "apiextensions.k8s.io/v1",
+            "kind": "CustomResourceDefinition",
+            "metadata": { "name": "widgets.example.com" },
+            "spec": {
+                "group": "example.com",
+                "scope": "Namespaced",
+                "names": {
+                    "plural": "widgets",
+                    "singular": "widget",
+                    "kind": "Widget"
+                },
+                "versions": [{
+                    "name": "v1",
+                    "served": true,
+                    "storage": true,
+                    "schema": {
+                        "openAPIV3Schema": {
+                            "type": "object"
+                        }
+                    }
+                }]
+            }
+        });
+
+        let env = Environment::default().with_crds(crd.clone()).unwrap();
+        assert_eq!(env.crd_install_options.crds, vec![crd.to_string()]);
+        let server = env.create().unwrap();
+        let client = server.client().unwrap();
+        let groups = client.list_api_groups().await.unwrap();
+        groups.groups.iter().find(|g| g.name == "example.com").ok_or(()).unwrap();
     }
 
     #[test]
     fn with_crds_accepts_vec() {
-        let mut env = Environment::default();
-
-        env.with_crds(vec!["a", "b"]).unwrap();
+        let env = Environment::default().with_crds(vec!["a", "b"]).unwrap();
 
         assert_eq!(env.crd_install_options.crds, vec!["\"a\"", "\"b\""]);
+        let err = env.create().unwrap_err();
+        assert!(matches!(err, EnvironmentError::Create(_)));
+        assert!(
+            err.to_string()
+                .contains("json: cannot unmarshal string into Go value")
+        );
     }
 
     #[test]
@@ -206,17 +318,32 @@ mod tests {
         let mut env = Environment::default();
         let crds = ["1", "2", "3"];
 
-        env.with_crds(&crds).unwrap();
+        env = env.with_crds(&crds).unwrap();
 
-        assert_eq!(env.crd_install_options.crds, vec!["1", "2", "3"]);
+        assert_eq!(
+            env.crd_install_options.crds,
+            vec!["\"1\"", "\"2\"", "\"3\""]
+        );
+        let err = env.create().unwrap_err();
+        assert!(matches!(err, EnvironmentError::Create(_)));
+        assert!(
+            err.to_string()
+                .contains("json: cannot unmarshal string into Go value")
+        );
     }
 
     #[test]
     fn with_crds_accepts_single_crd() {
         let mut env = Environment::default();
 
-        env.with_crds("42").unwrap();
+        env = env.with_crds("42").unwrap();
 
-        assert_eq!(env.crd_install_options.crds, vec!["42"]);
+        assert_eq!(env.crd_install_options.crds, vec!["\"42\""]);
+        let err = env.create().unwrap_err();
+        assert!(matches!(err, EnvironmentError::Create(_)));
+        assert!(
+            err.to_string()
+                .contains("json: cannot unmarshal string into Go value")
+        );
     }
 }

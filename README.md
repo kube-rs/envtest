@@ -1,6 +1,6 @@
 # envtest
 
-> A lightweight, type‑safe wrapper around the Kubernetes `envtest` Go package that lets you spin up a temporary control plane from Rust.
+A lightweight, type‑safe wrapper around the Kubernetes `envtest` Go package that lets you spin up a temporary control plane from Rust.
 
 `envtest` aims to make integration testing with real Kubernetes components straightforward. This project is based on the `envtest` Go package, but provides a Rust interface for the library usage.
 
@@ -49,6 +49,9 @@ kube = { version = "1" }
 use envtest::Environment;
 use kube::{Client, config::Kubeconfig};
 
+// Implement extension to define Kubeconfig and Client returned by the server across your crate and kube version
+envtest::impl_client_ext!(Kubeconfig, Client);
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Build the default environment (latest envtest binaries)
     let env = Environment::default();
@@ -57,10 +60,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = env.create()?;
 
     // 3. Retrieve a strongly‑typed kubeconfig
-    let kubeconfig: Kubeconfig = server.kubeconfig()?;
+    let kubeconfig = server.kubeconfig()?;
 
     // 4. Create a `kube` client
-    let client = Client::try_from(kubeconfig)?;
+    let client = server.client()?;
 
     // 5. `server` is dropped at the end of scope, cleaning up the control plane
     Ok(())
@@ -84,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #### Using `with_crds`
 
 ```rust
-use envtest::{Environment, BinaryAssetsSettings};
+use envtest::Environment;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -103,6 +106,24 @@ The `Server` implements `Drop`, but you can destroy it manually:
 ```rust
 let server = env.create()?;
 server.destroy()?;
+```
+
+### Typed Client Helper
+
+To avoid manually specifying `Kubeconfig` and `Client` instance for each setup, invoke `impl_client_ext!` once for your version of `kube`:
+
+```rust
+use envtest::Environment;
+use kube::{Client, config::Kubeconfig};
+
+envtest::impl_client_ext!(Kubeconfig, Client);
+
+#[tokio::test]
+async fn build_client_in_test() {
+    let server = Environment::default().create().unwrap();
+    let _client = server.client().unwrap(); // Creates Client instance directly
+    server.destroy().unwrap();
+}
 ```
 
 ---
