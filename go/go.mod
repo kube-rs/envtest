@@ -3,7 +3,7 @@ module envtest
 go 1.25.5
 
 require (
-	github.com/ihciah/rust2go v0.0.0-20250726175549-557d7a3a4e27
+	github.com/ihciah/rust2go v0.0.0-20260204100215-11857866675c
 	k8s.io/apiextensions-apiserver v0.35.1
 	k8s.io/apimachinery v0.35.1
 	k8s.io/client-go v0.35.1
