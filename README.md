@@ -24,7 +24,7 @@ A lightweight, type‑safe wrapper around the Kubernetes `envtest` Go package th
 - **Create** an isolated test environment with a fully‑working control plane.
 - **Destroy** the environment automatically when the `Server` instance is dropped.
 - **Retrieve** the kubeconfig as a strongly‑typed `kube::config::Kubeconfig`.
-- **Pre‑install** provide user CRDs, either from files or in‑memory definitions.
+- **Pre‑install** user CRDs from in‑memory definitions.
 
 ---
 
@@ -37,7 +37,6 @@ Add `envtest` to your Cargo.toml:
 ```toml
 [dependencies]
 envtest = "0.1"
-kube = { version = "1" }
 ```
 
 > **Note**: `rust2go` requires a working Go toolchain and `clang` for the bindgen step.  
@@ -47,13 +46,9 @@ kube = { version = "1" }
 
 ```rust
 use envtest::Environment;
-use kube::{Client, config::Kubeconfig};
-
-// Implement extension to define Kubeconfig and Client returned by the server across your crate and kube version
-envtest::impl_client_ext!(Kubeconfig, Client);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Build the default environment (latest envtest binaries)
+    // 1. Build the default environment
     let env = Environment::default();
 
     // 2. Spin up a temporary control plane
@@ -72,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Customizing the Environment
 
-`Environment` exposes two nested structs:
+You can tweak binary download behavior through `binary_assets_settings`:
 
 | Field | Purpose |
 |-------|---------|
@@ -83,6 +78,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `binary_assets_settings.binary_assets_directory` | Cache directory for downloaded binaries. |
 | `binary_assets_settings.download_binary_assets_version` | Specific `envtest` version to download. |
 | `binary_assets_settings.download_binary_assets_index_url` | URL pointing to the envtest release index. |
+
+```rust
+use envtest::Environment;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut env = Environment::default();
+    env.binary_assets_settings.download_binary_assets_version = Some("1.32.0".to_string());
+    env.binary_assets_settings.binary_assets_directory = Some(".cache/envtest".to_string());
+    let server = env.create()?;
+    Ok(())
+}
+```
 
 #### Using `with_crds`
 
@@ -106,24 +113,6 @@ The `Server` implements `Drop`, but you can destroy it manually:
 ```rust
 let server = env.create()?;
 server.destroy()?;
-```
-
-### Typed Client Helper
-
-To avoid manually specifying `Kubeconfig` and `Client` instance for each setup, invoke `impl_client_ext!` once for your version of `kube`:
-
-```rust
-use envtest::Environment;
-use kube::{Client, config::Kubeconfig};
-
-envtest::impl_client_ext!(Kubeconfig, Client);
-
-#[tokio::test]
-async fn build_client_in_test() {
-    let server = Environment::default().create().unwrap();
-    let _client = server.client().unwrap(); // Creates Client instance directly
-    server.destroy().unwrap();
-}
 ```
 
 ---

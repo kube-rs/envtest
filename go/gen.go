@@ -37,6 +37,7 @@ typedef struct ServerRef {
 
 typedef struct CreateResponseRef {
   struct ListRef err;
+  struct ListRef error_type;
   struct ServerRef server;
 } CreateResponseRef;
 
@@ -237,20 +238,23 @@ func refC_float(p *float32, _ *[]byte) C.float      { return C.float(*p) }
 func refC_double(p *float64, _ *[]byte) C.double    { return C.double(*p) }
 
 type CreateResponse struct {
-	err    []string
-	server Server
+	err        []string
+	error_type []uint8
+	server     Server
 }
 
 func newCreateResponse(p C.CreateResponseRef) CreateResponse {
 	return CreateResponse{
-		err:    new_list_mapper(newString)(p.err),
-		server: newServer(p.server),
+		err:        new_list_mapper(newString)(p.err),
+		error_type: new_list_mapper_primitive(newC_uint8_t)(p.error_type),
+		server:     newServer(p.server),
 	}
 }
 func ownCreateResponse(p C.CreateResponseRef) CreateResponse {
 	return CreateResponse{
-		err:    new_list_mapper(ownString)(p.err),
-		server: ownServer(p.server),
+		err:        new_list_mapper(ownString)(p.err),
+		error_type: new_list_mapper(newC_uint8_t)(p.error_type),
+		server:     ownServer(p.server),
 	}
 }
 func cntCreateResponse(s *CreateResponse, cnt *uint) [0]C.CreateResponseRef {
@@ -259,8 +263,9 @@ func cntCreateResponse(s *CreateResponse, cnt *uint) [0]C.CreateResponseRef {
 }
 func refCreateResponse(p *CreateResponse, buffer *[]byte) C.CreateResponseRef {
 	return C.CreateResponseRef{
-		err:    ref_list_mapper(refString)(&p.err, buffer),
-		server: refServer(&p.server, buffer),
+		err:        ref_list_mapper(refString)(&p.err, buffer),
+		error_type: ref_list_mapper_primitive(refC_uint8_t)(&p.error_type, buffer),
+		server:     refServer(&p.server, buffer),
 	}
 }
 

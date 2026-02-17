@@ -19,6 +19,7 @@ trait EnvTest {
 #[derive(rust2go::R2G)]
 struct CreateResponse {
     err: Option<String>,
+    error_type: Option<u8>,
     server: Server,
 }
 
@@ -28,11 +29,46 @@ struct DestroyResponse {
     err: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+enum CreateErrorType {
+    SetupBinaryAssetsDirectory = 0,
+    DecodeCrd = 1,
+    StartEnvironment = 2,
+    BuildKubeconfig = 3,
+    StopEnvironment = 4,
+    #[default]
+    Generic = 5,
+}
+
+impl From<u8> for CreateErrorType {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => Self::SetupBinaryAssetsDirectory,
+            1 => Self::DecodeCrd,
+            2 => Self::StartEnvironment,
+            3 => Self::BuildKubeconfig,
+            4 => Self::StopEnvironment,
+            _ => Self::default(),
+        }
+    }
+}
+
 /// Errors that can occur while creating an environment.
 #[derive(thiserror::Error, Debug)]
 pub enum EnvironmentError {
     #[error("Environment create error: {0}")]
     Create(String),
+    #[error("Setup binary assets directory error: {0}")]
+    SetupBinaryAssetsDirectory(String),
+    #[error("CRD decode error: {0}")]
+    DecodeCrd(String),
+    #[error("Start environment error: {0}")]
+    StartEnvironment(String),
+    #[error("Build kubeconfig error: {0}")]
+    BuildKubeconfig(String),
+    #[error("Stop environment error: {0}")]
+    StopEnvironment(String),
     #[error("CRD serialization error: {0}")]
     CrdSerialize(#[from] serde_json::Error),
     #[error("Unsupported CRD type. Expected string, object, or array of those.")]
@@ -111,7 +147,22 @@ impl Environment {
     /// Returns an [`EnvironmentError`] if the Go side reports any errors.
     pub fn create(&self) -> Result<Server, EnvironmentError> {
         let res = EnvTestImpl::create(self.clone());
-        res.err.map(EnvironmentError::Create).map_or(Ok(()), Err)?;
+
+        if let Some(err) = res.err {
+            let err = match res.error_type.map(Into::into).unwrap_or_default() {
+                CreateErrorType::SetupBinaryAssetsDirectory => {
+                    EnvironmentError::SetupBinaryAssetsDirectory(err)
+                }
+                CreateErrorType::DecodeCrd => EnvironmentError::DecodeCrd(err),
+                CreateErrorType::StartEnvironment => EnvironmentError::StartEnvironment(err),
+                CreateErrorType::BuildKubeconfig => EnvironmentError::BuildKubeconfig(err),
+                CreateErrorType::StopEnvironment => EnvironmentError::StopEnvironment(err),
+                CreateErrorType::Generic => EnvironmentError::Create(err),
+            };
+
+            return Err(err);
+        }
+
         Ok(res.server)
     }
 
@@ -153,15 +204,12 @@ impl Environment {
 pub enum ServerError {
     #[error("Environment destroy error: {0}")]
     Destroy(String),
-}
 
-#[cfg(feature = "kube")]
-#[derive(thiserror::Error, Debug)]
-pub enum ClientError {
     #[error("Deserialize kubeconfig error: {0}")]
     Kubeconfig(#[from] serde_json::Error),
 
-    #[error("Creating client error: {0}")]
+    #[cfg(feature = "kube")]
+    #[error("Opening client error: {0}")]
     Client(#[from] kube::Error),
 }
 
@@ -183,7 +231,7 @@ impl Server {
     /// Build a typed client from the stored kubeconfig.
     ///
     /// This first deserializes the kubeconfig using [`Self::kubeconfig`] and
-    /// then converts it into `C` via `TryFrom`.
+    /// then converts it into [`kube::Client`] via [`TryFrom`].
     ///
     /// ```rust
     /// # tokio_test::block_on(async {
@@ -199,11 +247,11 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns [`ClientError::Kubeconfig`] if [`kube::config::Kubeconfig`] deserialization fails,
-    /// or [`ClientError::Client`] if conversion into [`kube::Client`] fails.
+    /// Returns [`ServerError::Kubeconfig`] if [`kube::config::Kubeconfig`] deserialization fails,
+    /// or [`ServerError::Client`] if conversion into [`kube::Client`] fails.
     #[cfg(feature = "kube")]
     #[inline]
-    pub fn client(&self) -> Result<kube::Client, ClientError> {
+    pub fn client(&self) -> Result<kube::Client, ServerError> {
         Ok(self.kubeconfig()?.try_into()?)
     }
 
@@ -257,7 +305,7 @@ mod tests {
 
         assert_eq!(env.crd_install_options.crds, vec!["\"42\""]);
         let err = env.create().unwrap_err();
-        assert!(matches!(err, EnvironmentError::Create(_)));
+        assert!(matches!(err, EnvironmentError::DecodeCrd(_)));
         assert!(
             err.to_string()
                 .contains("json: cannot unmarshal string into Go value")
@@ -297,7 +345,12 @@ mod tests {
         let server = env.create().unwrap();
         let client = server.client().unwrap();
         let groups = client.list_api_groups().await.unwrap();
-        groups.groups.iter().find(|g| g.name == "example.com").ok_or(()).unwrap();
+        groups
+            .groups
+            .iter()
+            .find(|g| g.name == "example.com")
+            .ok_or(())
+            .unwrap();
     }
 
     #[test]
@@ -306,7 +359,7 @@ mod tests {
 
         assert_eq!(env.crd_install_options.crds, vec!["\"a\"", "\"b\""]);
         let err = env.create().unwrap_err();
-        assert!(matches!(err, EnvironmentError::Create(_)));
+        assert!(matches!(err, EnvironmentError::DecodeCrd(_)));
         assert!(
             err.to_string()
                 .contains("json: cannot unmarshal string into Go value")
@@ -325,7 +378,7 @@ mod tests {
             vec!["\"1\"", "\"2\"", "\"3\""]
         );
         let err = env.create().unwrap_err();
-        assert!(matches!(err, EnvironmentError::Create(_)));
+        assert!(matches!(err, EnvironmentError::DecodeCrd(_)));
         assert!(
             err.to_string()
                 .contains("json: cannot unmarshal string into Go value")
@@ -340,7 +393,7 @@ mod tests {
 
         assert_eq!(env.crd_install_options.crds, vec!["\"42\""]);
         let err = env.create().unwrap_err();
-        assert!(matches!(err, EnvironmentError::Create(_)));
+        assert!(matches!(err, EnvironmentError::DecodeCrd(_)));
         assert!(
             err.to_string()
                 .contains("json: cannot unmarshal string into Go value")
