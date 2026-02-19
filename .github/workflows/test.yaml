@@ -9,3 +9,4 @@ jobs:
         with:
           go-version-file: 'go/go.mod'
       - run: cargo build
+      - run: cargo t

@@ -13,6 +13,16 @@ rust2go = { version = "0.4.3" }
 serde = "1"
 serde_json = "1"
 thiserror = "2"
+k8s-openapi = { version = "*", features = ["latest"], optional = true }
+kube = { version = ">= 1", optional = true }
+
+[features]
+kube = ["dep:k8s-openapi", "dep:kube"]
+default = ["kube"]
+
+[dev-dependencies]
+tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
+tokio-test = "0.4.5"
 
 [build-dependencies]
 rust2go = { version = "0.4.3", features = ["build"] }

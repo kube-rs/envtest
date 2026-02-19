@@ -18,21 +18,61 @@ trait EnvTest {
 /// Response returned from [`EnvTest::create`].
 #[derive(rust2go::R2G)]
 struct CreateResponse {
-    err: Vec<String>,
+    err: Option<String>,
+    error_type: Option<u8>,
     server: Server,
 }
 
 /// Response returned from [`EnvTest::destroy`].
 #[derive(rust2go::R2G)]
 struct DestroyResponse {
-    err: Vec<String>,
+    err: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+enum CreateErrorType {
+    SetupBinaryAssetsDirectory = 0,
+    DecodeCrd = 1,
+    StartEnvironment = 2,
+    BuildKubeconfig = 3,
+    StopEnvironment = 4,
+    #[default]
+    Generic = 5,
+}
+
+impl From<u8> for CreateErrorType {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => Self::SetupBinaryAssetsDirectory,
+            1 => Self::DecodeCrd,
+            2 => Self::StartEnvironment,
+            3 => Self::BuildKubeconfig,
+            4 => Self::StopEnvironment,
+            _ => Self::default(),
+        }
+    }
 }
 
 /// Errors that can occur while creating an environment.
 #[derive(thiserror::Error, Debug)]
 pub enum EnvironmentError {
     #[error("Environment create error: {0}")]
-    CreateError(String),
+    Create(String),
+    #[error("Setup binary assets directory error: {0}")]
+    SetupBinaryAssetsDirectory(String),
+    #[error("CRD decode error: {0}")]
+    DecodeCrd(String),
+    #[error("Start environment error: {0}")]
+    StartEnvironment(String),
+    #[error("Build kubeconfig error: {0}")]
+    BuildKubeconfig(String),
+    #[error("Stop environment error: {0}")]
+    StopEnvironment(String),
+    #[error("CRD serialization error: {0}")]
+    CrdSerialize(#[from] serde_json::Error),
+    #[error("Unsupported CRD type. Expected object, or array of those.")]
+    UnsupportedCrdType,
 }
 
 /// Represents a request to create a test environment.
@@ -40,56 +80,55 @@ pub enum EnvironmentError {
 /// # Examples
 ///
 /// ```rust
-/// use envtest::Environment;
-///
 /// async fn test() -> Result<(), Box<dyn std::error::Error>> {
-///     # let env = Environment::default();
-///     # let server = env.create()?;
-///     # let kubeconfig: serde_json::Value = server.kubeconfig()?;
-///     # Ok(())
+///     let env = envtest::Environment::default();
+///     let server = env.create()?;
+///     let kubeconfig = server.kubeconfig()?;
+///     panic!("environment created");
+///     Ok(())
 /// }
 /// ```
 #[derive(rust2go::R2G, Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Environment {
-    /// crd_install_options are the options for installing CRDs.
+    /// `crd_install_options` are the options for installing CRDs.
     pub crd_install_options: CRDInstallOptions,
 
-    /// binary_assets_settings are the settings for downloading and using binary assets.
+    /// `binary_assets_settings` are the settings for downloading and using binary assets.
     pub binary_assets_settings: BinaryAssetsSettings,
 }
 
 #[derive(rust2go::R2G, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BinaryAssetsSettings {
-    /// download_binary_assets indicates that the envtest binaries should be downloaded.
-    /// If BinaryAssetsDirectory is also set, it is used to store the downloaded binaries,
+    /// `download_binary_assets` indicates that the envtest binaries should be downloaded.
+    /// If `BinaryAssetsDirectory` is also set, it is used to store the downloaded binaries,
     /// otherwise a tmp directory is created.
     pub download_binary_assets: bool,
 
-    /// download_binary_assets_version is the version of envtest binaries to download.
+    /// `download_binary_assets_version` is the version of envtest binaries to download.
     /// Defaults to the latest stable version (i.e. excluding alpha / beta / RC versions).
-    pub download_binary_assets_version: String,
+    pub download_binary_assets_version: Option<String>,
 
-    /// download_binary_assets_index_url is the index used to discover envtest binaries to download.
-    /// Defaults to https://raw.githubusercontent.com/kubernetes-sigs/controller-tools/HEAD/envtest-releases.yaml.
-    pub download_binary_assets_index_url: String,
+    /// `download_binary_assets_index_url` is the index used to discover envtest binaries to download.
+    /// Defaults to <https://raw.githubusercontent.com/kubernetes-sigs/controller-tools/HEAD/envtest-releases.yaml>.
+    pub download_binary_assets_index_url: Option<String>,
 
-    /// binary_assets_directory is the path where the binaries required for the envtest are
-    /// located in the local environment. This field can be overridden by setting KUBEBUILDER_ASSETS.
-    pub binary_assets_directory: String,
+    /// `binary_assets_directory` is the path where the binaries required for the envtest are
+    /// located in the local environment. This field can be overridden by setting `KUBEBUILDER_ASSETS`.
+    pub binary_assets_directory: Option<String>,
 }
 
 impl Default for BinaryAssetsSettings {
     fn default() -> Self {
         Self {
             download_binary_assets: true,
-            download_binary_assets_version: Default::default(),
-            download_binary_assets_index_url: Default::default(),
-            binary_assets_directory: Default::default(),
+            download_binary_assets_version: Option::default(),
+            download_binary_assets_index_url: Option::default(),
+            binary_assets_directory: Option::default(),
         }
     }
 }
 
-/// CRDInstallOptions is a struct that represents the CRD install options
+/// `CRDInstallOptions` is a struct that represents the CRD install options
 #[derive(rust2go::R2G, Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CRDInstallOptions {
     /// Paths to directories or files containing CRDs.
@@ -105,26 +144,88 @@ pub struct CRDInstallOptions {
 impl Environment {
     /// Create a new [`Server`] based on the current configuration.
     ///
+    /// # Errors
+    /// 
     /// Returns an [`EnvironmentError`] if the Go side reports any errors.
-    #[must_use]
     pub fn create(&self) -> Result<Server, EnvironmentError> {
         let res = EnvTestImpl::create(self.clone());
-        if let Some(error) = res.err.first().cloned() {
-            return Err(EnvironmentError::CreateError(error));
+
+        if let Some(err) = res.err {
+            let err = match res.error_type.map(Into::into).unwrap_or_default() {
+                CreateErrorType::SetupBinaryAssetsDirectory => {
+                    EnvironmentError::SetupBinaryAssetsDirectory(err)
+                }
+                CreateErrorType::DecodeCrd => EnvironmentError::DecodeCrd(err),
+                CreateErrorType::StartEnvironment => EnvironmentError::StartEnvironment(err),
+                CreateErrorType::BuildKubeconfig => EnvironmentError::BuildKubeconfig(err),
+                CreateErrorType::StopEnvironment => EnvironmentError::StopEnvironment(err),
+                CreateErrorType::Generic => EnvironmentError::Create(err),
+            };
+
+            return Err(err);
         }
 
         Ok(res.server)
     }
 
-    /// Add CRDs to the environment.
+    /// Add one or multiple CRDs to the environment.
+    /// 
+    /// # Examples
+    ///
+    /// ```rust
+    /// # fn main() -> Result<(), envtest::EnvironmentError> {
+    /// let crd = serde_json::json!({
+    ///     "apiVersion": "apiextensions.k8s.io/v1",
+    ///     "kind": "CustomResourceDefinition",
+    ///     "metadata": { "name": "widgets.example.com" },
+    ///     "spec": {
+    ///         "group": "example.com",
+    ///         "scope": "Namespaced",
+    ///         "names": {
+    ///             "plural": "widgets",
+    ///             "singular": "widget",
+    ///             "kind": "Widget",
+    ///             "listKind": "WidgetList"
+    ///         },
+    ///         "versions": [{
+    ///             "name": "v1",
+    ///             "served": true,
+    ///             "storage": true,
+    ///             "schema": {
+    ///                 "openAPIV3Schema": {
+    ///                     "type": "object"
+    ///                 }
+    ///             }
+    ///         }]
+    ///     }
+    /// });
+    ///
+    /// let env = envtest::Environment::default().with_crds(crd)?;
+    /// env.create()?;
+    /// # Ok(())
+    /// # }
+    /// ```
     ///
     /// # Errors
     ///
-    /// Returns an [`serde_json::Error`] if any CRDs cannot be serialized to JSON.
-    pub fn with_crds(&mut self, crds: Vec<impl serde::Serialize>) -> Result<&mut Self, serde_json::Error> {
-        for crd in crds {
-            let crd = serde_json::to_string(&crd)?;
-            self.crd_install_options.crds.push(crd);
+    /// Returns an [`EnvironmentError::UnsupportedCrdType`] when serialization fails or an unsupported
+    /// CRD value is provided. Actual CRD deserialization will be performed on `.create()`,
+    /// which will return [`EnvironmentError::DecodeCrd`].
+    pub fn with_crds(mut self, crds: impl serde::Serialize) -> Result<Self, EnvironmentError> {
+        match serde_json::to_value(crds)? {
+            serde_json::Value::Array(crds) => {
+                for crd in crds {
+                    self.crd_install_options
+                        .crds
+                        .push(serde_json::to_string(&crd)?);
+                }
+            }
+            serde_json::Value::Object(crd) => {
+                self.crd_install_options
+                    .crds
+                    .push(serde_json::to_string(&crd)?);
+            }
+            _ => return Err(EnvironmentError::UnsupportedCrdType),
         }
 
         Ok(self)
@@ -133,9 +234,16 @@ impl Environment {
 
 /// Errors that can occur while destroying an environment.
 #[derive(thiserror::Error, Debug)]
-pub enum DestroyError {
+pub enum ServerError {
     #[error("Environment destroy error: {0}")]
-    DestroyError(String),
+    Destroy(String),
+
+    #[error("Deserialize kubeconfig error: {0}")]
+    Kubeconfig(#[from] serde_json::Error),
+
+    #[cfg(feature = "kube")]
+    #[error("Opening client error: {0}")]
+    Client(#[from] kube::Error),
 }
 
 /// Represents a running test server.
@@ -145,28 +253,66 @@ pub struct Server {
 }
 
 impl Server {
+    /// Destroy the server and clean up resources.
+    ///
+    /// # Errors
+    /// 
+    /// Errors returned by the Go side are converted into [`ServerError`].
+    pub fn destroy(&self) -> Result<(), ServerError> {
+        let res = EnvTestImpl::destroy(self.kubeconfig.clone());
+        res.err.map(ServerError::Destroy).map_or(Ok(()), Err)
+    }
+
+    /// Build a typed client from the stored kubeconfig.
+    ///
+    /// This first deserializes the kubeconfig using [`Self::kubeconfig`] and
+    /// then converts it into [`kube::Client`] via [`TryFrom`].
+    ///
+    /// ```rust
+    /// # tokio_test::block_on(async {
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let server = envtest::Environment::default().create()?;
+    /// let client = server.client()?;
+    /// server.destroy()?;
+    /// # Ok(())
+    /// # }
+    /// # run().await.unwrap()
+    /// # })
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServerError::Kubeconfig`] if [`kube::config::Kubeconfig`] deserialization fails,
+    /// or [`ServerError::Client`] if conversion into [`kube::Client`] fails.
+    #[cfg(feature = "kube")]
+    #[inline]
+    pub fn client(&self) -> Result<kube::Client, ServerError> {
+        Ok(self.kubeconfig()?.try_into()?)
+    }
+
     /// Deserialize the stored kubeconfig into the given type.
     ///
-    /// The kubeconfig is stored as a JSON string; this helper converts it
-    /// into a strongly typed value.
+    /// ```rust
+    /// let server = envtest::Environment::default().create()?;
+    /// let cfg = server.kubeconfig()?;
+    /// server.destroy()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     ///
     /// # Errors
     ///
     /// If the kubeconfig cannot be deserialized into the given type, a
     /// [`serde_json::Error`] is returned.
-    pub fn kubeconfig<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
-        serde_json::from_str(&self.kubeconfig)
+    #[cfg(feature = "kube")]
+    #[inline]
+    pub fn kubeconfig(&self) -> Result<kube::config::Kubeconfig, serde_json::Error> {
+        serde_json::from_str(self.as_ref())
     }
+}
 
-    /// Destroy the server and clean up resources.
-    ///
-    /// Errors returned by the Go side are converted into `DestroyError`.
-    pub fn destroy(&self) -> Result<(), DestroyError> {
-        let res = EnvTestImpl::destroy(self.kubeconfig.clone());
-        if let Some(error) = res.err.first().cloned() {
-            return Err(DestroyError::DestroyError(error));
-        }
-        Ok(())
+impl AsRef<str> for Server {
+    fn as_ref(&self) -> &str {
+        &self.kubeconfig
     }
 }
 
@@ -174,5 +320,90 @@ impl Drop for Server {
     /// Automatically destroy the server when it goes out of scope.
     fn drop(&mut self) {
         let _ = self.destroy();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Environment;
+
+    #[tokio::test]
+    async fn e2e() {
+        let env = Environment::default();
+        let server = env.create().unwrap();
+        server.destroy().unwrap();
+    }
+
+    #[cfg(feature = "kube")]
+    #[tokio::test]
+    async fn with_crds_accepts_simple_real_crd() {
+        let crd = serde_json::json!({
+            "apiVersion": "apiextensions.k8s.io/v1",
+            "kind": "CustomResourceDefinition",
+            "metadata": { "name": "widgets.example.com" },
+            "spec": {
+                "group": "example.com",
+                "scope": "Namespaced",
+                "names": {
+                    "plural": "widgets",
+                    "singular": "widget",
+                    "kind": "Widget",
+                    "listKind": "WidgetList"
+                },
+                "versions": [{
+                    "name": "v1",
+                    "served": true,
+                    "storage": true,
+                    "schema": {
+                        "openAPIV3Schema": {
+                            "type": "object"
+                        }
+                    }
+                }]
+            }
+        });
+
+        let env = Environment::default().with_crds(crd.clone()).unwrap();
+        assert_eq!(env.crd_install_options.crds, vec![crd.to_string()]);
+        let server = env.create().unwrap();
+        let client = server.client().unwrap();
+        let groups = client.list_api_groups().await.unwrap();
+        groups
+            .groups
+            .iter()
+            .find(|g| g.name == "example.com")
+            .ok_or(())
+            .unwrap();
+    }
+
+    #[test]
+    fn with_crds_accepts_option_single_vec_and_slice() {
+        let crd_a =
+            serde_json::json!({"kind": "CustomResourceDefinition", "metadata": {"name": "a"}});
+        let crd_b =
+            serde_json::json!({"kind": "CustomResourceDefinition", "metadata": {"name": "b"}});
+        let crd_c =
+            serde_json::json!({"kind": "CustomResourceDefinition", "metadata": {"name": "c"}});
+
+        let env_single = Environment::default().with_crds(crd_a.clone()).unwrap();
+        assert_eq!(env_single.crd_install_options.crds, vec![crd_a.to_string()]);
+
+        let env_option = Environment::default().with_crds(Some(crd_a.clone())).unwrap();
+        assert_eq!(env_option.crd_install_options.crds, vec![crd_a.to_string()]);
+
+        let env_vec = Environment::default()
+            .with_crds(vec![crd_a.clone(), crd_b.clone()])
+            .unwrap();
+        assert_eq!(
+            env_vec.crd_install_options.crds,
+            vec![crd_a.to_string(), crd_b.to_string()]
+        );
+
+        let crds = [crd_a.clone(), crd_b.clone(), crd_c.clone()];
+        let env_slice = Environment::default().with_crds(&crds).unwrap();
+        assert_eq!(
+            env_slice.crd_install_options.crds,
+            vec![crd_a.to_string(), crd_b.to_string(), crd_c.to_string()]
+        );
     }
 }

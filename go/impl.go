@@ -25,6 +25,16 @@ var (
 
 type Envtest struct{}
 
+type createErrorType uint8
+
+const (
+	createErrorTypeSetupBinaryAssetsDirectory createErrorType = iota
+	createErrorTypeDecodeCRD
+	createErrorTypeStartEnvironment
+	createErrorTypeBuildKubeconfig
+	createErrorTypeStopEnvironment
+)
+
 func init() {
 	EnvTestImpl = Envtest{}
 }
@@ -74,26 +84,40 @@ func FromEnvTestConfig(cfg *rest.Config) (string, error) {
 
 // create implements EnvTest.
 func (e Envtest) create(req *Environment) (resp CreateResponse) {
+	storeErr := func(err error, errorType createErrorType) CreateResponse {
+		resp.err = append(resp.err, err.Error())
+		resp.error_type = append(resp.error_type, uint8(errorType))
+
+		return resp
+	}
+
 	env := &envtest.Environment{
-		BinaryAssetsDirectory:        req.binary_assets_settings.binary_assets_directory,
-		DownloadBinaryAssetsVersion:  req.binary_assets_settings.download_binary_assets_version,
-		DownloadBinaryAssetsIndexURL: req.binary_assets_settings.download_binary_assets_index_url,
-		DownloadBinaryAssets:         req.binary_assets_settings.download_binary_assets,
+		DownloadBinaryAssets: req.binary_assets_settings.download_binary_assets,
 		CRDInstallOptions: envtest.CRDInstallOptions{
 			Paths:              req.crd_install_options.paths,
 			ErrorIfPathMissing: req.crd_install_options.error_if_path_missing,
 		},
 	}
 
-	storeErr := func(err error) CreateResponse {
-		resp.err = append(resp.err, err.Error())
+	if len(req.binary_assets_settings.binary_assets_directory) > 0 {
+		env.BinaryAssetsDirectory = req.binary_assets_settings.binary_assets_directory[0]
+	} else if binaryAssetsDirectory, err := envtest.SetupEnvtestDefaultBinaryAssetsDirectory(); err != nil {
+		return storeErr(err, createErrorTypeSetupBinaryAssetsDirectory)
+	} else {
+		env.BinaryAssetsDirectory = binaryAssetsDirectory
+	}
 
-		return resp
+	if len(req.binary_assets_settings.download_binary_assets_version) > 0 {
+		env.DownloadBinaryAssetsVersion = req.binary_assets_settings.download_binary_assets_version[0]
+	}
+
+	if len(req.binary_assets_settings.download_binary_assets_index_url) > 0 {
+		env.DownloadBinaryAssetsIndexURL = req.binary_assets_settings.download_binary_assets_index_url[0]
 	}
 
 	destroy := func(env *envtest.Environment) {
 		if err := env.Stop(); err != nil {
-			storeErr(err)
+			storeErr(err, createErrorTypeStopEnvironment)
 		}
 	}
 
@@ -101,7 +125,7 @@ func (e Envtest) create(req *Environment) (resp CreateResponse) {
 	for _, data := range req.crd_install_options.crds {
 		crd := &apiextensionsv1.CustomResourceDefinition{}
 		if _, _, err := jsonSerializer.Decode([]byte(data), &gvk, crd); err != nil {
-			return storeErr(err)
+			return storeErr(err, createErrorTypeDecodeCRD)
 		}
 
 		env.CRDs = append(env.CRDs, crd)
@@ -109,14 +133,14 @@ func (e Envtest) create(req *Environment) (resp CreateResponse) {
 
 	config, err := env.Start()
 	if err != nil {
-		return storeErr(err)
+		return storeErr(err, createErrorTypeStartEnvironment)
 	}
 
 	kubeconfig, err := FromEnvTestConfig(config)
 	if err != nil {
 		defer destroy(env)
 
-		return storeErr(err)
+		return storeErr(err, createErrorTypeBuildKubeconfig)
 	}
 
 	environments.Store(kubeconfig, *env)
