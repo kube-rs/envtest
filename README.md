@@ -13,7 +13,9 @@ A lightweight, type‑safe wrapper around the Kubernetes `envtest` Go package th
   - [Installation](#installation)
   - [Basic Usage](#basic-usage)
   - [Customizing the Environment](#customizing-the-environment)
+    - [Using `with_crds`](#using-with_crds)
   - [Explicit Cleanup](#explicit-cleanup)
+  - [Usage in testing](#usage-in-testing)
 - [Building the Bindings](#building-the-bindings)
 - [License](#license)
 
@@ -95,11 +97,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 use envtest::Environment;
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let crd = MyCustomResource::crd();
+
     let env = Environment::default()
-        .with_crds(vec![CustomResourceDefinition::default()])?;
+        .with_crds(crd)?;
 
     let server = env.create()?;
     Ok(())
@@ -114,6 +117,43 @@ The `Server` implements `Drop`, but you can destroy it manually:
 let server = env.create()?;
 server.destroy()?;
 ```
+
+
+### Usage in testing
+
+`envtest` is most useful in combination with the `kube` feature (enabled by default), which provides a strongly typed API client for interacting with the Kubernetes API.
+
+```rust
+use envtest::Environment;
+use kube::{Api, api::{DeleteParams, PostParams}};
+use k8s_openapi::api::core::v1::Namespace;
+
+#[tokio::test]
+async fn work_with_namespace_with_kube_client() -> Result<(), Box<dyn std::error::Error>> {
+    let server = Environment::default().create()?;
+    let namespaces: Api<Namespace> = Api::all(server.client()?);
+    namespaces
+        .create(
+            &PostParams::default(),
+            &Namespace {
+                metadata: kube::core::ObjectMeta {
+                    name: Some("envtest-e2e".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    namespaces
+        .delete("envtest-e2e", &DeleteParams::default())
+        .await?;
+
+    Ok(())
+}
+```
+
+For test suites, prefer one `Environment` per test to avoid shared state between cases.
 
 ---
 

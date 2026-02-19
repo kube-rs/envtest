@@ -71,7 +71,7 @@ pub enum EnvironmentError {
     StopEnvironment(String),
     #[error("CRD serialization error: {0}")]
     CrdSerialize(#[from] serde_json::Error),
-    #[error("Unsupported CRD type. Expected string, object, or array of those.")]
+    #[error("Unsupported CRD type. Expected object, or array of those.")]
     UnsupportedCrdType,
 }
 
@@ -166,16 +166,52 @@ impl Environment {
         Ok(res.server)
     }
 
-    /// Add one or many CRDs to the environment.
+    /// Add one or multiple CRDs to the environment.
+    /// 
+    /// # Examples
+    ///
+    /// ```rust
+    /// # fn main() -> Result<(), envtest::EnvironmentError> {
+    /// let crd = serde_json::json!({
+    ///     "apiVersion": "apiextensions.k8s.io/v1",
+    ///     "kind": "CustomResourceDefinition",
+    ///     "metadata": { "name": "widgets.example.com" },
+    ///     "spec": {
+    ///         "group": "example.com",
+    ///         "scope": "Namespaced",
+    ///         "names": {
+    ///             "plural": "widgets",
+    ///             "singular": "widget",
+    ///             "kind": "Widget",
+    ///             "listKind": "WidgetList"
+    ///         },
+    ///         "versions": [{
+    ///             "name": "v1",
+    ///             "served": true,
+    ///             "storage": true,
+    ///             "schema": {
+    ///                 "openAPIV3Schema": {
+    ///                     "type": "object"
+    ///                 }
+    ///             }
+    ///         }]
+    ///     }
+    /// });
+    ///
+    /// let env = envtest::Environment::default().with_crds(crd)?;
+    /// env.create()?;
+    /// # Ok(())
+    /// # }
+    /// ```
     ///
     /// # Errors
     ///
-    /// Returns an [`EnvironmentError`] when serialization fails or an unsupported
-    /// CRD value is provided.
+    /// Returns an [`EnvironmentError::UnsupportedCrdType`] when serialization fails or an unsupported
+    /// CRD value is provided. Actual CRD deserialization will be performed on `.create()`,
+    /// which will return [`EnvironmentError::DecodeCrd`].
     pub fn with_crds(mut self, crds: impl serde::Serialize) -> Result<Self, EnvironmentError> {
         match serde_json::to_value(crds)? {
             serde_json::Value::Array(crds) => {
-                self.crd_install_options.crds.reserve(crds.len());
                 for crd in crds {
                     self.crd_install_options
                         .crds
@@ -186,11 +222,6 @@ impl Environment {
                 self.crd_install_options
                     .crds
                     .push(serde_json::to_string(&crd)?);
-            }
-            serde_json::Value::String(crd) => {
-                self.crd_install_options
-                    .crds
-                    .push(serde_json::Value::String(crd).to_string());
             }
             _ => return Err(EnvironmentError::UnsupportedCrdType),
         }
@@ -235,13 +266,13 @@ impl Server {
     ///
     /// ```rust
     /// # tokio_test::block_on(async {
-    /// async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let server = envtest::Environment::default().create()?;
-    ///     let client = server.client()?;
-    ///     server.destroy()?;
-    ///     Ok(())
-    /// }
-    /// run().await.unwrap()
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let server = envtest::Environment::default().create()?;
+    /// let client = server.client()?;
+    /// server.destroy()?;
+    /// # Ok(())
+    /// # }
+    /// # run().await.unwrap()
     /// # })
     /// ```
     ///
@@ -299,19 +330,6 @@ mod tests {
         server.destroy().unwrap()
     }
 
-    #[test]
-    fn with_crds_accepts_option() {
-        let env = Environment::default().with_crds(Some("42")).unwrap();
-
-        assert_eq!(env.crd_install_options.crds, vec!["\"42\""]);
-        let err = env.create().unwrap_err();
-        assert!(matches!(err, EnvironmentError::DecodeCrd(_)));
-        assert!(
-            err.to_string()
-                .contains("json: cannot unmarshal string into Go value")
-        );
-    }
-
     #[cfg(feature = "kube")]
     #[tokio::test]
     async fn with_crds_accepts_simple_real_crd() {
@@ -325,7 +343,8 @@ mod tests {
                 "names": {
                     "plural": "widgets",
                     "singular": "widget",
-                    "kind": "Widget"
+                    "kind": "Widget",
+                    "listKind": "WidgetList"
                 },
                 "versions": [{
                     "name": "v1",
@@ -354,49 +373,33 @@ mod tests {
     }
 
     #[test]
-    fn with_crds_accepts_vec() {
-        let env = Environment::default().with_crds(vec!["a", "b"]).unwrap();
+    fn with_crds_accepts_option_single_vec_and_slice() {
+        let crd_a =
+            serde_json::json!({"kind": "CustomResourceDefinition", "metadata": {"name": "a"}});
+        let crd_b =
+            serde_json::json!({"kind": "CustomResourceDefinition", "metadata": {"name": "b"}});
+        let crd_c =
+            serde_json::json!({"kind": "CustomResourceDefinition", "metadata": {"name": "c"}});
 
-        assert_eq!(env.crd_install_options.crds, vec!["\"a\"", "\"b\""]);
-        let err = env.create().unwrap_err();
-        assert!(matches!(err, EnvironmentError::DecodeCrd(_)));
-        assert!(
-            err.to_string()
-                .contains("json: cannot unmarshal string into Go value")
-        );
-    }
+        let env_single = Environment::default().with_crds(crd_a.clone()).unwrap();
+        assert_eq!(env_single.crd_install_options.crds, vec![crd_a.to_string()]);
 
-    #[test]
-    fn with_crds_accepts_slice() {
-        let mut env = Environment::default();
-        let crds = ["1", "2", "3"];
+        let env_option = Environment::default().with_crds(Some(crd_a.clone())).unwrap();
+        assert_eq!(env_option.crd_install_options.crds, vec![crd_a.to_string()]);
 
-        env = env.with_crds(&crds).unwrap();
-
+        let env_vec = Environment::default()
+            .with_crds(vec![crd_a.clone(), crd_b.clone()])
+            .unwrap();
         assert_eq!(
-            env.crd_install_options.crds,
-            vec!["\"1\"", "\"2\"", "\"3\""]
+            env_vec.crd_install_options.crds,
+            vec![crd_a.to_string(), crd_b.to_string()]
         );
-        let err = env.create().unwrap_err();
-        assert!(matches!(err, EnvironmentError::DecodeCrd(_)));
-        assert!(
-            err.to_string()
-                .contains("json: cannot unmarshal string into Go value")
-        );
-    }
 
-    #[test]
-    fn with_crds_accepts_single_crd() {
-        let mut env = Environment::default();
-
-        env = env.with_crds("42").unwrap();
-
-        assert_eq!(env.crd_install_options.crds, vec!["\"42\""]);
-        let err = env.create().unwrap_err();
-        assert!(matches!(err, EnvironmentError::DecodeCrd(_)));
-        assert!(
-            err.to_string()
-                .contains("json: cannot unmarshal string into Go value")
+        let crds = [crd_a.clone(), crd_b.clone(), crd_c.clone()];
+        let env_slice = Environment::default().with_crds(&crds).unwrap();
+        assert_eq!(
+            env_slice.crd_install_options.crds,
+            vec![crd_a.to_string(), crd_b.to_string(), crd_c.to_string()]
         );
     }
 }
