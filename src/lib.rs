@@ -90,30 +90,30 @@ pub enum EnvironmentError {
 /// ```
 #[derive(rust2go::R2G, Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Environment {
-    /// crd_install_options are the options for installing CRDs.
+    /// `crd_install_options` are the options for installing CRDs.
     pub crd_install_options: CRDInstallOptions,
 
-    /// binary_assets_settings are the settings for downloading and using binary assets.
+    /// `binary_assets_settings` are the settings for downloading and using binary assets.
     pub binary_assets_settings: BinaryAssetsSettings,
 }
 
 #[derive(rust2go::R2G, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BinaryAssetsSettings {
-    /// download_binary_assets indicates that the envtest binaries should be downloaded.
-    /// If BinaryAssetsDirectory is also set, it is used to store the downloaded binaries,
+    /// `download_binary_assets` indicates that the envtest binaries should be downloaded.
+    /// If `BinaryAssetsDirectory` is also set, it is used to store the downloaded binaries,
     /// otherwise a tmp directory is created.
     pub download_binary_assets: bool,
 
-    /// download_binary_assets_version is the version of envtest binaries to download.
+    /// `download_binary_assets_version` is the version of envtest binaries to download.
     /// Defaults to the latest stable version (i.e. excluding alpha / beta / RC versions).
     pub download_binary_assets_version: Option<String>,
 
-    /// download_binary_assets_index_url is the index used to discover envtest binaries to download.
-    /// Defaults to https://raw.githubusercontent.com/kubernetes-sigs/controller-tools/HEAD/envtest-releases.yaml.
+    /// `download_binary_assets_index_url` is the index used to discover envtest binaries to download.
+    /// Defaults to <https://raw.githubusercontent.com/kubernetes-sigs/controller-tools/HEAD/envtest-releases.yaml>.
     pub download_binary_assets_index_url: Option<String>,
 
-    /// binary_assets_directory is the path where the binaries required for the envtest are
-    /// located in the local environment. This field can be overridden by setting KUBEBUILDER_ASSETS.
+    /// `binary_assets_directory` is the path where the binaries required for the envtest are
+    /// located in the local environment. This field can be overridden by setting `KUBEBUILDER_ASSETS`.
     pub binary_assets_directory: Option<String>,
 }
 
@@ -121,14 +121,14 @@ impl Default for BinaryAssetsSettings {
     fn default() -> Self {
         Self {
             download_binary_assets: true,
-            download_binary_assets_version: Default::default(),
-            download_binary_assets_index_url: Default::default(),
-            binary_assets_directory: Default::default(),
+            download_binary_assets_version: Option::default(),
+            download_binary_assets_index_url: Option::default(),
+            binary_assets_directory: Option::default(),
         }
     }
 }
 
-/// CRDInstallOptions is a struct that represents the CRD install options
+/// `CRDInstallOptions` is a struct that represents the CRD install options
 #[derive(rust2go::R2G, Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CRDInstallOptions {
     /// Paths to directories or files containing CRDs.
@@ -144,6 +144,8 @@ pub struct CRDInstallOptions {
 impl Environment {
     /// Create a new [`Server`] based on the current configuration.
     ///
+    /// # Errors
+    /// 
     /// Returns an [`EnvironmentError`] if the Go side reports any errors.
     pub fn create(&self) -> Result<Server, EnvironmentError> {
         let res = EnvTestImpl::create(self.clone());
@@ -253,6 +255,8 @@ pub struct Server {
 impl Server {
     /// Destroy the server and clean up resources.
     ///
+    /// # Errors
+    /// 
     /// Errors returned by the Go side are converted into [`ServerError`].
     pub fn destroy(&self) -> Result<(), ServerError> {
         let res = EnvTestImpl::destroy(self.kubeconfig.clone());
@@ -321,13 +325,13 @@ impl Drop for Server {
 
 #[cfg(test)]
 mod tests {
-    use super::{Environment, EnvironmentError};
+    use super::Environment;
 
     #[tokio::test]
     async fn e2e() {
         let env = Environment::default();
         let server = env.create().unwrap();
-        server.destroy().unwrap()
+        server.destroy().unwrap();
     }
 
     #[cfg(feature = "kube")]
