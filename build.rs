@@ -16,11 +16,9 @@ fn should_regen(src: &Path, dst: &Path) -> Option<bool> {
     Some(modified(src)? > modified(dst)?)
 }
 
-fn main() {
-    // Allow docs.rs to build without golang dependency
-    #[cfg(docsrs)]
-    return;
-
+// Allow docs.rs to build without golang or r2g dependency
+#[cfg(not(feature = "_docsrs"))]
+fn build() {
     // Ensure build script reruns when Rust API definitions change.
     watch_files!("src", "go/go.sum", "go/go.mod", "go/impl.go",);
 
@@ -40,4 +38,9 @@ fn main() {
     }
 
     builder.build();
+}
+
+fn main() {
+    #[cfg(not(feature = "_docsrs"))]
+    build();
 }
