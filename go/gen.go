@@ -43,6 +43,7 @@ typedef struct CreateResponseRef {
 
 typedef struct DestroyResponseRef {
   struct ListRef err;
+  struct ListRef error_type;
 } DestroyResponseRef;
 
 typedef struct EnvironmentRef {
@@ -270,17 +271,20 @@ func refCreateResponse(p *CreateResponse, buffer *[]byte) C.CreateResponseRef {
 }
 
 type DestroyResponse struct {
-	err []string
+	err        []string
+	error_type []uint8
 }
 
 func newDestroyResponse(p C.DestroyResponseRef) DestroyResponse {
 	return DestroyResponse{
-		err: new_list_mapper(newString)(p.err),
+		err:        new_list_mapper(newString)(p.err),
+		error_type: new_list_mapper_primitive(newC_uint8_t)(p.error_type),
 	}
 }
 func ownDestroyResponse(p C.DestroyResponseRef) DestroyResponse {
 	return DestroyResponse{
-		err: new_list_mapper(ownString)(p.err),
+		err:        new_list_mapper(ownString)(p.err),
+		error_type: new_list_mapper(newC_uint8_t)(p.error_type),
 	}
 }
 func cntDestroyResponse(s *DestroyResponse, cnt *uint) [0]C.DestroyResponseRef {
@@ -289,7 +293,8 @@ func cntDestroyResponse(s *DestroyResponse, cnt *uint) [0]C.DestroyResponseRef {
 }
 func refDestroyResponse(p *DestroyResponse, buffer *[]byte) C.DestroyResponseRef {
 	return C.DestroyResponseRef{
-		err: ref_list_mapper(refString)(&p.err, buffer),
+		err:        ref_list_mapper(refString)(&p.err, buffer),
+		error_type: ref_list_mapper_primitive(refC_uint8_t)(&p.error_type, buffer),
 	}
 }
 

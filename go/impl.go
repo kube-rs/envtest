@@ -35,6 +35,13 @@ const (
 	createErrorTypeStopEnvironment
 )
 
+type destroyErrorType uint8
+
+const (
+	destroyErrorEnvMissing destroyErrorType = iota
+	destroyErrorTypeStopEnvironment
+)
+
 func init() {
 	EnvTestImpl = Envtest{}
 }
@@ -156,20 +163,21 @@ func (e Envtest) destroy(kubeconfig *string) (resp DestroyResponse) {
 		return
 	}
 
-	env, ok := environments.Load(*kubeconfig)
-	if !ok {
-		return
-	}
-
-	storeErr := func(err error) DestroyResponse {
+	storeErr := func(err error, errorType destroyErrorType) DestroyResponse {
 		resp.err = append(resp.err, err.Error())
+		resp.error_type = append(resp.error_type, uint8(errorType))
 
 		return resp
 	}
 
+	env, ok := environments.Load(*kubeconfig)
+	if !ok {
+		return storeErr(fmt.Errorf("environement for the provided kubeconfig was already destroyed or does not exist"), destroyErrorEnvMissing)
+	}
+
 	err := env.Stop()
 	if err != nil {
-		return storeErr(err)
+		return storeErr(err, destroyErrorTypeStopEnvironment)
 	}
 
 	return
