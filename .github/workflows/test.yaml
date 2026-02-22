@@ -10,3 +10,10 @@ jobs:
           go-version-file: 'go/go.mod'
       - run: cargo build
       - run: cargo t
+  docs-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/install@cargo-docs-rs
+      - run: cargo docs-rs
