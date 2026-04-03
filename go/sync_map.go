@@ -12,7 +12,12 @@ type Map[K comparable, V any] struct {
 // The ok result indicates whether value was found in the map.
 func (m *Map[K, V]) Load(key K) (value V, ok bool) {
 	v, ok := m.Map.Load(key)
-	return v.(V), ok
+	if !ok {
+		var zero V
+		return zero, false
+	}
+
+	return v.(V), true
 }
 
 // Store sets the value for a key.

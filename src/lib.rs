@@ -1,3 +1,25 @@
+//! Helpers for creating short-lived Kubernetes envtest environments from Rust.
+//!
+//! # Examples
+//!
+//! ```rust
+//! # tokio_test::block_on(async {
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let server = envtest::Environment::default().create().await?;
+//! # #[cfg(not(feature = "_docsrs"))]
+//! assert!(server.exist());
+//! # #[cfg(feature = "kube")]
+//! # {
+//! let _ = server.kubeconfig()?;
+//! let client = server.client()?;
+//! let _ = client.apiserver_version().await?;
+//! # }
+//! server.destroy().await?;
+//! # Ok(())
+//! # }
+//! # run().await.unwrap();
+//! # })
+//! ```
 #[cfg(not(feature = "_docsrs"))]
 pub mod binding {
     #![allow(warnings, errors)]
@@ -14,6 +36,7 @@ pub mod binding {
 #[rust2go::r2g]
 trait EnvTest {
     fn create(req: Environment) -> CreateResponse;
+    fn exist(kubeconfig: String) -> bool;
     fn destroy(kubeconfig: String) -> DestroyResponse;
 }
 
@@ -101,13 +124,15 @@ pub enum EnvironmentError {
 /// # Examples
 ///
 /// ```rust
-/// async fn test() -> Result<(), Box<dyn std::error::Error>> {
-///     let env = envtest::Environment::default();
-///     let server = env.create()?;
-///     let kubeconfig = server.kubeconfig()?;
-///     panic!("environment created");
-///     Ok(())
-/// }
+/// # tokio_test::block_on(async {
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let env = envtest::Environment::default();
+/// let server = env.create().await?;
+/// server.destroy().await?;
+/// # Ok(())
+/// # }
+/// # run().await.unwrap()
+/// # })
 /// ```
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(not(feature = "_docsrs"), derive(rust2go::R2G))]
@@ -119,12 +144,29 @@ pub struct Environment {
     pub binary_assets_settings: BinaryAssetsSettings,
 }
 
+/// Binary asset configuration used while starting an envtest control plane.
+///
+/// # Examples
+///
+/// ```rust
+/// let settings = envtest::BinaryAssetsSettings {
+///     download_binary_assets: false,
+///     binary_assets_directory: Some("/tmp/envtest-assets".to_owned()),
+///     ..Default::default()
+/// };
+///
+/// assert!(!settings.download_binary_assets);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(not(feature = "_docsrs"), derive(rust2go::R2G))]
 pub struct BinaryAssetsSettings {
     /// `download_binary_assets` indicates that the envtest binaries should be downloaded.
     /// If `BinaryAssetsDirectory` is also set, it is used to store the downloaded binaries,
     /// otherwise a tmp directory is created.
+    ///
+    /// We default to downloading the binaries to ensure the environment can be created without
+    /// additional configuration, but this can be set to `false` when the binaries are already
+    /// available in the environment via [`BinaryAssetsSettings::binary_assets_directory`] or `KUBEBUILDER_ASSETS`.
     pub download_binary_assets: bool,
 
     /// `download_binary_assets_version` is the version of envtest binaries to download.
@@ -137,6 +179,15 @@ pub struct BinaryAssetsSettings {
 
     /// `binary_assets_directory` is the path where the binaries required for the envtest are
     /// located in the local environment. This field can be overridden by setting `KUBEBUILDER_ASSETS`.
+    ///
+    /// While defaulted to `None`, implementations of [`Environment::create`] uses `envtest.SetupEnvtestDefaultBinaryAssetsDirectory()`
+    /// method which is recommended for shared use of envtest binaries across multiple test runs.
+    ///
+    /// The directory is dependent on operating system:
+    ///
+    /// - Windows: %LocalAppData%\kubebuilder-envtest
+    /// - OSX: ~/Library/Application Support/io.kubebuilder.envtest
+    /// - Others: ${XDG_DATA_HOME:-~/.local/share}/kubebuilder-envtest
     pub binary_assets_directory: Option<String>,
 }
 
@@ -151,31 +202,66 @@ impl Default for BinaryAssetsSettings {
     }
 }
 
-/// `CRDInstallOptions` is a struct that represents the CRD install options
+/// CRD installation settings used during environment creation.
+///
+/// Control plane startup and shutdown timeouts are configured through the
+/// `KUBEBUILDER_CONTROLPLANE_START_TIMEOUT` and
+/// `KUBEBUILDER_CONTROLPLANE_STOP_TIMEOUT` environment variables. These are the
+/// primary interface for timeout tuning and default to `20s` when unspecified.
+///
+/// # Examples
+///
+/// ```rust
+/// let options = envtest::CRDInstallOptions {
+///     paths: vec!["config/crd".to_owned()],
+///     ..Default::default()
+/// };
+///
+/// assert!(options.paths.contains(&"config/crd".to_owned()));
+/// ```
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(not(feature = "_docsrs"), derive(rust2go::R2G))]
 pub struct CRDInstallOptions {
-    /// Paths to directories or files containing CRDs.
-    paths: Vec<String>,
+    /// Paths to directories or files containing CRDs. Can be used to install existing CRDs from the filesystem.
+    pub paths: Vec<String>,
 
     /// Specific CRD jsons to install.
-    crds: Vec<String>,
-
-    /// Whether to error if a path does not exist.
-    error_if_path_missing: bool,
+    pub crds: Vec<String>,
 }
 
+/// Represents the environment configuration for creating a test server.
+///
 impl Environment {
-    /// Create a new [`Server`] based on the current configuration.
+    /// Asynchronously create a new [`Server`] based on the current configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # tokio_test::block_on(async {
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let server = envtest::Environment::default().create().await?;
+    /// # #[cfg(feature = "kube")]
+    /// # {
+    /// let client = server.client()?;
+    /// # let _ = client;
+    /// # }
+    /// server.destroy().await?;
+    /// # Ok(())
+    /// # }
+    /// # run().await.unwrap()
+    /// # })
+    /// ```
     ///
     /// # Errors
     ///
-    /// Returns an [`EnvironmentError`] if the Go side reports any errors.
-    pub fn create(&self) -> Result<Server, EnvironmentError> {
+    /// Errors returned by the Go side are converted into [`EnvironmentError`].
+    pub async fn create(&self) -> Result<Server, EnvironmentError> {
         #[cfg(feature = "_docsrs")]
         let res = CreateResponse::default();
         #[cfg(not(feature = "_docsrs"))]
-        let res = EnvTestImpl::create(self.clone());
+        let this = self.clone();
+        #[cfg(not(feature = "_docsrs"))]
+        let res = smol::unblock(move || EnvTestImpl::create(this)).await;
 
         if let Some(err) = res.err {
             let err = match res.error_type.map(Into::into).unwrap_or_default() {
@@ -195,12 +281,15 @@ impl Environment {
         Ok(res.server)
     }
 
-    /// Add one or multiple CRDs to the environment.
+    /// Add one or multiple CRDs to the environment. Can accept any serializable version of CRD,
+    /// including typed structs like MyType::crd(), untyped `serde_json::Value`,
+    /// or any combination of those in `Vec` or `Option`.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// # fn main() -> Result<(), envtest::EnvironmentError> {
+    /// # tokio_test::block_on(async {
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
     /// let crd = serde_json::json!({
     ///     "apiVersion": "apiextensions.k8s.io/v1",
     ///     "kind": "CustomResourceDefinition",
@@ -228,9 +317,11 @@ impl Environment {
     /// });
     ///
     /// let env = envtest::Environment::default().with_crds(crd)?;
-    /// env.create()?;
+    /// env.create().await?;
     /// # Ok(())
     /// # }
+    /// # run().await.unwrap()
+    /// # })
     /// ```
     ///
     /// # Errors
@@ -259,7 +350,7 @@ impl Environment {
     }
 }
 
-/// Errors that can occur while destroying an environment.
+/// Errors that can occur while destroying an environment or using a running server.
 #[derive(thiserror::Error, Debug)]
 pub enum ServerError {
     #[error("Environment destroy error: {0}")]
@@ -277,9 +368,38 @@ pub enum ServerError {
     #[cfg(feature = "kube")]
     #[error("Opening client error: {0}")]
     Client(#[from] kube::Error),
+
+    #[cfg(feature = "kube")]
+    #[error("Attempted to use client after the environment was destroyed")]
+    EnvironmentDestroyed,
 }
 
 /// Represents a running test server.
+///
+/// A server holds the serialized kubeconfig returned by envtest and can be
+/// queried, converted into a Kubernetes client, or destroyed explicitly.
+///
+/// # Examples
+///
+/// ```rust
+/// # tokio_test::block_on(async {
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let server = envtest::Environment::default().create().await?;
+/// # #[cfg(not(feature = "_docsrs"))]
+/// assert!(server.exist());
+/// # #[cfg(feature = "kube")]
+/// # {
+/// let _ = server.kubeconfig()?;
+/// let client = server.client()?;
+/// let _ = client.apiserver_version().await?;
+/// # }
+/// server.destroy().await?;
+/// assert!(!server.exist());
+/// # Ok(())
+/// # }
+/// # run().await.unwrap();
+/// # })
+/// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(not(feature = "_docsrs"), derive(rust2go::R2G))]
 pub struct Server {
@@ -287,12 +407,28 @@ pub struct Server {
 }
 
 impl Server {
-    /// Destroy the server and clean up resources.
+    /// Asynchronously destroy the server and clean up resources.
+    ///
+    /// By default, the server will be automatically destroyed with best effort
+    /// when it goes out of scope via [`Drop::drop`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # tokio_test::block_on(async {
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let server = envtest::Environment::default().create().await?;
+    /// server.destroy().await?;
+    /// # Ok(())
+    /// # }
+    /// # run().await.unwrap()
+    /// # })
+    /// ```
     ///
     /// # Errors
     ///
     /// Errors returned by the Go side are converted into [`ServerError`].
-    pub fn destroy(&self) -> Result<(), ServerError> {
+    pub async fn destroy(&self) -> Result<(), ServerError> {
         #[cfg(feature = "_docsrs")]
         let res = DestroyResponse::default();
         #[cfg(not(feature = "_docsrs"))]
@@ -309,17 +445,52 @@ impl Server {
         Ok(())
     }
 
+    /// Check whether this environment is still running.
+    ///
+    /// This queries the underlying envtest process registry using this
+    /// server's serialized kubeconfig and returns `true` when the matching
+    /// environment is still running.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # tokio_test::block_on(async {
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let server = envtest::Environment::default().create().await?;
+    ///
+    /// # #[cfg(not(feature = "_docsrs"))]
+    /// assert!(server.exist());
+    ///
+    /// server.destroy().await?;
+    /// assert!(!server.exist());
+    /// # Ok(())
+    /// # }
+    /// # run().await.unwrap();
+    /// # })
+    /// ```
+    pub fn exist(&self) -> bool {
+        #[cfg(feature = "_docsrs")]
+        return false;
+        #[cfg(not(feature = "_docsrs"))]
+        return EnvTestImpl::exist(self.kubeconfig.clone());
+    }
+
     /// Build a typed client from the stored kubeconfig.
     ///
     /// This first deserializes the kubeconfig using [`Self::kubeconfig`] and
     /// then converts it into [`kube::Client`] via [`TryFrom`].
     ///
+    /// The returned [`kube::Client`] works against the temporary [`Server`], so
+    /// the server must not be destroyed before the client is used last time.
+    ///
+    /// # Examples
+    ///
     /// ```rust
     /// # tokio_test::block_on(async {
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let server = envtest::Environment::default().create()?;
+    /// let server = envtest::Environment::default().create().await?;
     /// let client = server.client()?;
-    /// server.destroy()?;
+    /// server.destroy().await?;
     /// # Ok(())
     /// # }
     /// # run().await.unwrap()
@@ -333,16 +504,27 @@ impl Server {
     #[cfg(feature = "kube")]
     #[inline]
     pub fn client(&self) -> Result<kube::Client, ServerError> {
+        if !self.exist() {
+            return Err(ServerError::EnvironmentDestroyed);
+        }
+
         Ok(self.kubeconfig()?.try_into()?)
     }
 
     /// Deserialize the stored kubeconfig into the given type.
     ///
+    /// # Examples
+    ///
     /// ```rust
-    /// let server = envtest::Environment::default().create()?;
+    /// # tokio_test::block_on(async {
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let server = envtest::Environment::default().create().await?;
     /// let cfg = server.kubeconfig()?;
-    /// server.destroy()?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// server.destroy().await?;
+    /// # Ok(())
+    /// # }
+    /// # run().await.unwrap();
+    /// # })
     /// ```
     ///
     /// # Errors
@@ -365,7 +547,7 @@ impl AsRef<str> for Server {
 impl Drop for Server {
     /// Automatically destroy the server when it goes out of scope.
     fn drop(&mut self) {
-        let _ = self.destroy();
+        let _ = smol::block_on(self.destroy());
     }
 }
 
@@ -373,11 +555,41 @@ impl Drop for Server {
 mod tests {
     use super::Environment;
 
+    #[cfg(feature = "kube")]
+    use kube::{CustomResource, CustomResourceExt};
+
+    #[cfg(feature = "kube")]
+    #[derive(
+        CustomResource, serde::Deserialize, serde::Serialize, Clone, Debug, schemars::JsonSchema,
+    )]
+    #[kube(
+        group = "generated.example.com",
+        version = "v1",
+        kind = "GeneratedWidget",
+        namespaced
+    )]
+    struct GeneratedWidgetSpec {
+        replicas: i32,
+    }
+
     #[tokio::test]
     async fn e2e() {
         let env = Environment::default();
-        let server = env.create().unwrap();
-        server.destroy().unwrap();
+        let server = env.create().await.unwrap();
+        server.destroy().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "kube")]
+    async fn destroyed_environment_is_checked_by_client() {
+        let env = Environment::default();
+        let server = env.create().await.unwrap();
+        server.destroy().await.unwrap();
+
+        assert!(matches!(
+            server.client(),
+            Err(super::ServerError::EnvironmentDestroyed)
+        ));
     }
 
     #[cfg(feature = "kube")]
@@ -411,13 +623,35 @@ mod tests {
 
         let env = Environment::default().with_crds(crd.clone()).unwrap();
         assert_eq!(env.crd_install_options.crds, vec![crd.to_string()]);
-        let server = env.create().unwrap();
+        let server = env.create().await.unwrap();
         let client = server.client().unwrap();
         let groups = client.list_api_groups().await.unwrap();
         groups
             .groups
             .iter()
             .find(|g| g.name == "example.com")
+            .ok_or(())
+            .unwrap();
+    }
+
+    #[cfg(feature = "kube")]
+    #[tokio::test]
+    async fn with_crds_accepts_kube_generated_crd() {
+        let crd = GeneratedWidget::crd();
+
+        let env = Environment::default().with_crds(crd.clone()).unwrap();
+        assert_eq!(
+            env.crd_install_options.crds,
+            vec![serde_json::to_string(&crd).unwrap()]
+        );
+
+        let server = env.create().await.unwrap();
+        let client = server.client().unwrap();
+        let groups = client.list_api_groups().await.unwrap();
+        groups
+            .groups
+            .iter()
+            .find(|g| g.name == "generated.example.com")
             .ok_or(())
             .unwrap();
     }
