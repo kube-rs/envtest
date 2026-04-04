@@ -29,6 +29,7 @@ k8s-openapi = { version = ">= 0", features = ["latest"]}
 kube = { version = ">= 1", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.5"
+seq-macro = "0.3"
 
 [build-dependencies]
 rust2go = { version = "0.4.3", features = ["build"], optional = true }

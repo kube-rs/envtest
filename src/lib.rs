@@ -688,4 +688,15 @@ mod tests {
             vec![crd_a.to_string(), crd_b.to_string(), crd_c.to_string()]
         );
     }
+
+    #[cfg(feature = "kube")]
+    seq_macro::seq!(N in 1..=50 {
+        #[tokio::test]
+        async fn parallel_test_case_~N() {
+            let server = Environment::default().create().await.unwrap();
+            let client = server.client().unwrap();
+            client.apiserver_version().await.unwrap();
+            server.destroy().await.unwrap();
+        }
+    });
 }
