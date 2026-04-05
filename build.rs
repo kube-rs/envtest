@@ -1,17 +1,23 @@
+#[cfg(not(feature = "_docsrs"))]
 use std::fs;
+#[cfg(not(feature = "_docsrs"))]
 use std::path::Path;
+#[cfg(not(feature = "_docsrs"))]
 use std::time::SystemTime;
 
+#[cfg(not(feature = "_docsrs"))]
 macro_rules! watch_files {
     ($($p:literal),* $(,)?) => {
         $(println!("cargo:rerun-if-changed={}", $p);)*
     };
 }
 
+#[cfg(not(feature = "_docsrs"))]
 fn modified(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).ok()?.modified().ok()
 }
 
+#[cfg(not(feature = "_docsrs"))]
 fn should_regen(src: &Path, dst: &Path) -> Option<bool> {
     Some(modified(src)? > modified(dst)?)
 }
