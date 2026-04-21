@@ -27,7 +27,7 @@ default = ["kube", "r2g"]
 schemars = ">= 1"
 k8s-openapi = { version = ">= 0", features = ["latest"]}
 kube = { version = ">= 1", features = ["derive"] }
-tokio = { version = "1.52.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.5"
 seq-macro = "0.3"
 
