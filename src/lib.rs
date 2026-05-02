@@ -105,6 +105,8 @@ pub enum EnvironmentError {
     Create(String),
     #[error("Setup binary assets directory error: {0}")]
     SetupBinaryAssetsDirectory(String),
+    #[error("No such file or directory: {0}")]
+    NoSuchFileOrDirectory(#[from] std::io::Error),
     #[error("CRD decode error: {0}")]
     DecodeCrd(String),
     #[error("Start environment error: {0}")]
@@ -223,6 +225,7 @@ impl Default for BinaryAssetsSettings {
 #[cfg_attr(not(feature = "_docsrs"), derive(rust2go::R2G))]
 pub struct CRDInstallOptions {
     /// Paths to directories or files containing CRDs. Can be used to install existing CRDs from the filesystem.
+    /// The paths must be absolute or relative to where the application or test command is run from.
     pub paths: Vec<String>,
 
     /// Specific CRD jsons to install.
@@ -344,6 +347,47 @@ impl Environment {
                     .push(serde_json::to_string(&crd)?);
             }
             _ => return Err(EnvironmentError::UnsupportedCrdType),
+        }
+
+        Ok(self)
+    }
+
+    /// Add CRDs to the environment based on files. Can be immediate file paths or directories.
+    /// The paths must be absolute or relative to where the application or test is run from.
+    /// I.e., if your CRD is in `src/crds/my_crd.yaml`, using that path and running
+    /// `cargo run test` from the crate root works, but running from inside `src/` fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # tokio_test::block_on(async {
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let paths = vec!["./crds/example_crd.yaml".to_owned()];
+    /// let env = envtest::Environment::default().with_crds_from_paths(paths)?;
+    /// env.create().await?;
+    /// # Ok(())
+    /// # }
+    /// # run().await.unwrap()
+    /// # })
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EnvironmentError::NoSuchFileOrDirectory`] when no file or
+    /// directory is found for a given path. Actual CRD deserialization will be
+    /// performed on `.create()`, which may return[`EnvironmentError::DecodeCrd`].
+    pub fn with_crds_from_paths(
+        mut self,
+        crd_paths: Vec<String>,
+    ) -> Result<Self, EnvironmentError> {
+        for path in crd_paths {
+            // Already check for existence before passing to kubeapi.
+            // When the file cannot be loaded, the user would get e.g. a 404
+            // HTTP status later when trying to list resources, which is
+            // confusing because it is unclear where that came from.
+            let _ = std::fs::metadata(&path)
+                .map_err(|e| EnvironmentError::NoSuchFileOrDirectory(e))?;
+            self.crd_install_options.paths.push(path);
         }
 
         Ok(self)
