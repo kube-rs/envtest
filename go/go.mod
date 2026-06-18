@@ -1,6 +1,6 @@
 module envtest
 
-go 1.26.0
+go 1.26.4
 
 require (
 	github.com/ihciah/rust2go v0.0.0-20260204100215-11857866675c

@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env = Environment::default();
 
     // 2. Spin up a temporary control plane
-    let server = env.create()?;
+    let server = env.create().await?;
 
     // 3. Retrieve a strongly‑typed kubeconfig
     let kubeconfig = server.kubeconfig()?;
@@ -86,9 +86,9 @@ use envtest::Environment;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut env = Environment::default();
-    env.binary_assets_settings.download_binary_assets_version = Some("1.32.0".to_string());
+    env.binary_assets_settings.download_binary_assets_version = Some("1.36.0".to_string());
     env.binary_assets_settings.binary_assets_directory = Some(".cache/envtest".to_string());
-    let server = env.create()?;
+    let server = env.create().await?;
     Ok(())
 }
 ```
@@ -104,7 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env = Environment::default()
         .with_crds(crd)?;
 
-    let server = env.create()?;
+    let server = env.create().await?;
     Ok(())
 }
 ```
@@ -114,7 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 The `Server` implements `Drop`, but you can destroy it manually:
 
 ```rust
-let server = env.create()?;
+let server = env.create().await?;
 server.destroy()?;
 ```
 
@@ -130,7 +130,7 @@ use k8s_openapi::api::core::v1::Namespace;
 
 #[tokio::test]
 async fn work_with_namespace_with_kube_client() -> Result<(), Box<dyn std::error::Error>> {
-    let server = Environment::default().create()?;
+    let server = Environment::default().create().await?;
     let namespaces: Api<Namespace> = Api::all(server.client()?);
     namespaces
         .create(
