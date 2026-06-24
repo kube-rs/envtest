@@ -8,12 +8,12 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: 'go/go.mod'
-      - run: cargo build
-      - run: cargo t
+      - run: K8S_OPENAPI_ENABLED_VERSION=latest cargo build
+      - run: K8S_OPENAPI_ENABLED_VERSION=latest cargo t
   docs-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - uses: dtolnay/install@cargo-docs-rs
-      - run: cargo docs-rs
+      - run: K8S_OPENAPI_ENABLED_VERSION=latest cargo docs-rs
